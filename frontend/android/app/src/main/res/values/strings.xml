@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">nepa-app</string>
+    <string name="title_activity_main">nepa-app</string>
+    <string name="package_name">com.nepa.app</string>
+    <string name="custom_url_scheme">com.nepa.app</string>
+</resources>
