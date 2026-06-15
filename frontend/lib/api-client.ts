@@ -2,7 +2,7 @@ const BASE_URL = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL || ""
 
 export interface ApiError extends Error {
   status?: number
-  info?: any
+  info?: unknown
 }
 
 export async function apiClient<T>(

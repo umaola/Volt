@@ -100,6 +100,15 @@ function PageContent() {
     applianceBreakdown: any[]
   } | null>(null)
 
+  const navigateTo = (page: string, isBackNavigation: boolean = false) => {
+    setSignupError(null)
+    setLoginError(null)
+    if (!isBackNavigation) {
+      setNavigationHistory((prev) => [...prev, pageParam])
+    }
+    router.push(`/?page=${page}`)
+  }
+
   const fetchDashboardData = React.useCallback(() => {
     setIsDashboardLoading(true)
     const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
@@ -287,14 +296,6 @@ function PageContent() {
     }
   }, [pageParam, fetchDashboardData, fetchHistoryData, fetchInsightsData])
 
-  const navigateTo = (page: string, isBackNavigation: boolean = false) => {
-    setSignupError(null)
-    setLoginError(null)
-    if (!isBackNavigation) {
-      setNavigationHistory((prev) => [...prev, pageParam])
-    }
-    router.push(`/?page=${page}`)
-  }
 
   const handleBack = () => {
     if (navigationHistory.length > 0) {

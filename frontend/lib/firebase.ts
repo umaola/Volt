@@ -15,11 +15,11 @@ const auth = getAuth(app)
 
 if (process.env.NODE_ENV === "development") {
   try {
-    if (!(auth as any)._emulatorConfig) {
+    if (!(auth as unknown as { _emulatorConfig?: unknown })._emulatorConfig) {
       const host = typeof window !== "undefined" ? window.location.hostname : "127.0.0.1"
       connectAuthEmulator(auth, `http://${host}:9099`, { disableWarnings: true })
     }
-  } catch (err) {
+  } catch {
   }
 }
 
