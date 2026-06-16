@@ -126,15 +126,15 @@ function PageContent() {
           setPowerState(data.powerState)
         }
         setUser({
-          name: data.userName || "Amarachi Okafor",
-          phone: data.phone || "08012345678",
-          email: data.email || "amarachi@example.com",
-          meterNumber: data.meterNumber || "0127217047315",
-          disco: data.disco || "EKEDC",
-          tariffBand: data.tariffBand || "Band A",
-          meterType: data.meterType || "Prepaid",
-          currentUnits: data.remainingUnits ?? 18.4,
-          plan: data.subscription?.planType || "Monthly",
+          name: data.userName || (auth.currentUser?.displayName || "Amarachi Okafor"),
+          phone: data.phone || (auth.currentUser?.phoneNumber || ""),
+          email: data.email || (auth.currentUser?.email || ""),
+          meterNumber: data.meterNumber || "",
+          disco: data.disco || "",
+          tariffBand: data.tariffBand || "",
+          meterType: data.meterType || "",
+          currentUnits: data.remainingUnits ?? 0,
+          plan: data.subscription?.planType || "",
           notificationPreferences: data.notificationPreferences,
           subscription: data.subscription
         })
@@ -210,6 +210,24 @@ function PageContent() {
         setDashboardData(null)
         setAuthResolved(true)
       } else {
+        const urlParams = new URLSearchParams(window.location.search)
+        const currentPage = urlParams.get("page") || "splash"
+        if (currentPage === "otp") {
+          setAuthResolved(true)
+          return
+        }
+        setAuthResolved(false)
+        setUser((prev) => prev || {
+          name: firebaseUser.displayName || "",
+          phone: firebaseUser.phoneNumber || "",
+          email: firebaseUser.email || "",
+          meterNumber: "",
+          disco: "",
+          tariffBand: "",
+          meterType: "",
+          currentUnits: 0,
+          plan: ""
+        })
         const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
         fetch(`${backendUrl}/getDashboardData?uid=${firebaseUser.uid}`)
           .then((res) => {
@@ -220,9 +238,9 @@ function PageContent() {
             setDashboardData(data)
             if (data.powerState) setPowerState(data.powerState)
             setUser({
-              name: data.userName || "Amarachi Okafor",
-              phone: data.phone || "",
-              email: data.email || "",
+              name: data.userName || firebaseUser.displayName || "Amarachi Okafor",
+              phone: data.phone || firebaseUser.phoneNumber || "",
+              email: data.email || firebaseUser.email || "",
               meterNumber: data.meterNumber || "",
               disco: data.disco || "",
               tariffBand: data.tariffBand || "",
@@ -249,7 +267,7 @@ function PageContent() {
 
     if (!user) {
       if (!["splash", "signup", "login", "otp"].includes(pageParam)) {
-        navigateTo("splash")
+        navigateTo("login")
       }
     } else {
       if (!user.meterNumber) {
@@ -796,15 +814,9 @@ function PageContent() {
   }
 
   const handleLogout = () => {
-    signOut(auth)
-      .then(() => {
-        setUser(null)
-        setDashboardData(null)
-        navigateTo("splash")
-      })
-      .catch((err) => {
-        console.error(err)
-      })
+    signOut(auth).catch((err) => {
+      console.error(err)
+    })
   }
 
   const handleTabChange = (tab: TabType) => {
