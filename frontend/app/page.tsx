@@ -488,8 +488,6 @@ function PageContent() {
     signInWithEmailAndPassword(auth, email, password)
       .then((result) => {
         trackAnalyticsEvent("login", { email })
-        fetchDashboardData()
-        navigateTo("dashboard")
       })
       .catch((error) => {
         console.error("Login failed:", error)

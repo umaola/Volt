@@ -1,5 +1,4 @@
 import * as React from "react"
-import { Slider } from "@/components/ui/slider"
 import { Badge } from "@/components/ui/badge"
 import { StandardCard } from "@/components/design-system/card"
 import { TextField } from "@/components/design-system/input"
@@ -10,7 +9,6 @@ import {
   IconFlame,
   IconPlug,
   IconPlus,
-  IconClock,
   IconBolt
 } from "@tabler/icons-react"
 
@@ -142,7 +140,7 @@ export function ApplianceCalibrationStep({
                     </Badge>
                   </div>
 
-                  <div className="flex flex-col gap-3">
+                  <div className="grid grid-cols-2 gap-3">
                     <TextField
                       placeholder="e.g. 100"
                       label="Wattage (W)"
@@ -151,23 +149,15 @@ export function ApplianceCalibrationStep({
                       onChange={(e) => onApplianceUpdate(app.name, "wattage", parseInt(e.target.value, 10) || 0)}
                       disabled={isLoading}
                     />
-
-                    <div className="flex flex-col gap-1.5">
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-[#4B5563] flex items-center gap-1">
-                          <IconClock className="w-3.5 h-3.5" /> Daily Usage
-                        </span>
-                        <span className="font-semibold text-[#121212]">{app.hours} hrs</span>
-                      </div>
-                      <Slider
-                        value={[app.hours]}
-                        min={0.5}
-                        max={24}
-                        step={0.5}
-                        onValueChange={(vals) => onApplianceUpdate(app.name, "hours", vals[0])}
-                        disabled={isLoading}
-                      />
-                    </div>
+                    <TextField
+                      placeholder="e.g. 8"
+                      label="Daily Usage (hrs)"
+                      type="number"
+                      step="any"
+                      value={app.hours || ""}
+                      onChange={(e) => onApplianceUpdate(app.name, "hours", parseFloat(e.target.value) || 0)}
+                      disabled={isLoading}
+                    />
                   </div>
                 </StandardCard>
               )

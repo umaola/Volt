@@ -281,17 +281,41 @@ export const getDashboardData = onRequest({ cors: true }, async (request, respon
             userName = userData?.name || "Amarachi Okafor";
             phone = userData?.phone || "";
             email = userData?.email || "";
+        } else {
+            try {
+                const { getAuth } = await import("firebase-admin/auth");
+                const authUser = await getAuth().getUser(uid);
+                email = authUser.email || "";
+                userName = authUser.displayName || authUser.email?.split("@")[0] || "Amarachi Okafor";
+            } catch (authErr) {
+                logger.error("Error fetching user from Auth:", authErr);
+            }
         }
 
-        const profileDoc = await db.collection("electricity_profiles").doc(uid).get();
-        let tariffBand = "Band A";
-        let disco = "EKEDC";
-        let meterType = "Prepaid";
-        if (profileDoc.exists) {
-            const profileData = profileDoc.data();
-            tariffBand = profileData?.tariff_band || "Band A";
-            disco = profileData?.disco || "EKEDC";
-            meterType = profileData?.meter_type || "Prepaid";
+        const metersQuery = await db.collection("meters").where("user_id", "==", uid).limit(1).get();
+        const hasOnboarded = !metersQuery.empty;
+
+        let tariffBand = "";
+        let disco = "";
+        let meterType = "";
+        let currentUnits = 0;
+        let meterNumber = "";
+
+        if (hasOnboarded) {
+            const profileDoc = await db.collection("electricity_profiles").doc(uid).get();
+            if (profileDoc.exists) {
+                const profileData = profileDoc.data();
+                tariffBand = profileData?.tariff_band || "Band A";
+                disco = profileData?.disco || "EKEDC";
+                meterType = profileData?.meter_type || "Prepaid";
+            } else {
+                tariffBand = "Band A";
+                disco = "EKEDC";
+                meterType = "Prepaid";
+            }
+            const mDoc = metersQuery.docs[0];
+            currentUnits = mDoc.data().current_units ?? 18.4;
+            meterNumber = mDoc.data().meter_number || mDoc.id || "";
         }
 
         let tariffRate = 209.50;
@@ -323,15 +347,6 @@ export const getDashboardData = onRequest({ cors: true }, async (request, respon
                 "Band E": 37.50
             };
             tariffRate = ratesMap[tariffBand] ?? 209.50;
-        }
-
-        const metersQuery = await db.collection("meters").where("user_id", "==", uid).limit(1).get();
-        let currentUnits = 18.4;
-        let meterNumber = "";
-        if (!metersQuery.empty) {
-            const mDoc = metersQuery.docs[0];
-            currentUnits = mDoc.data().current_units ?? 18.4;
-            meterNumber = mDoc.data().meter_number || mDoc.id || "";
         }
         const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
         const logsQuery1 = await db.collection("power_supply_logs")
@@ -452,15 +467,18 @@ export const getDashboardData = onRequest({ cors: true }, async (request, respon
             };
         }
 
-        const subDoc = await db.collection("subscriptions").doc(uid).get();
-        let subscription = { planType: "Free Trial", status: "trialing", endDate: new Date(Date.now() + 12 * 24 * 60 * 60 * 1000).toISOString() };
-        if (subDoc.exists) {
-            const subData = subDoc.data();
-            subscription = {
-                planType: subData?.plan_type || "Free Trial",
-                status: subData?.status || "trialing",
-                endDate: subData?.end_date || new Date(Date.now() + 12 * 24 * 60 * 60 * 1000).toISOString()
-            };
+        let subscription = null;
+        if (hasOnboarded) {
+            const subDoc = await db.collection("subscriptions").doc(uid).get();
+            subscription = { planType: "Free Trial", status: "trialing", endDate: new Date(Date.now() + 12 * 24 * 60 * 60 * 1000).toISOString() };
+            if (subDoc.exists) {
+                const subData = subDoc.data();
+                subscription = {
+                    planType: subData?.plan_type || "Free Trial",
+                    status: subData?.status || "trialing",
+                    endDate: subData?.end_date || new Date(Date.now() + 12 * 24 * 60 * 60 * 1000).toISOString()
+                };
+            }
         }
 
         response.status(200).send({
