@@ -17,7 +17,9 @@ import { DevicesPage } from "@/components/pages/devices-page"
 import { SurgeChecklistPage } from "@/components/pages/surge-checklist-page"
 import { BottomNavigation, TabType } from "@/components/design-system/bottom-navigation"
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail, onAuthStateChanged, signOut } from "firebase/auth"
-import { auth } from "@/lib/firebase"
+import { auth, getFcmToken, onMessageListener } from "@/lib/firebase"
+import { toast } from "sonner"
+
 
 function PageContent() {
   const router = useRouter()
@@ -296,23 +298,69 @@ function PageContent() {
 
       const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
       const uid = auth.currentUser?.uid || "mock-uid"
-      fetch(`${backendUrl}/registerDeviceToken`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          uid,
-          deviceToken: "token_mock_" + uid,
-          platform: "web"
+      const registerFCM = async () => {
+        try {
+          if (typeof window !== "undefined" && "Notification" in window) {
+            const permission = await Notification.requestPermission()
+            if (permission === "granted") {
+              const token = await getFcmToken()
+              if (token) {
+                await fetch(`${backendUrl}/registerDeviceToken`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    uid,
+                    deviceToken: token,
+                    platform: "web"
+                  })
+                })
+                return
+              }
+            }
+          }
+        } catch (e) {
+          console.error("FCM registration error:", e)
+        }
+        await fetch(`${backendUrl}/registerDeviceToken`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            uid,
+            deviceToken: "token_mock_" + uid,
+            platform: "web"
+          })
+        }).catch((err) => {
+          console.error("Mock token registration error:", err)
         })
-      }).catch((err) => {
-        console.error("Token registration error:", err)
-      })
+      }
+      registerFCM()
     } else if (pageParam === "history" || pageParam === "calculator") {
       fetchHistoryData()
     } else if (pageParam === "insights") {
       fetchInsightsData()
     }
   }, [pageParam, fetchDashboardData, fetchHistoryData, fetchInsightsData])
+
+  React.useEffect(() => {
+    let unsubscribeMessageListener: (() => void) | undefined
+    const setupListener = async () => {
+      unsubscribeMessageListener = await onMessageListener((payload) => {
+        if (payload?.notification) {
+          toast(payload.notification.title || "Notification", {
+            description: payload.notification.body,
+            duration: 5000,
+          })
+        }
+      })
+    }
+    setupListener()
+    return () => {
+      if (unsubscribeMessageListener) {
+        unsubscribeMessageListener()
+      }
+    }
+  }, [])
+
 
 
   const handleBack = () => {

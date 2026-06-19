@@ -1,5 +1,6 @@
 import { initializeApp, getApps, getApp } from "firebase/app"
 import { getAuth, connectAuthEmulator } from "firebase/auth"
+import { getMessaging, getToken, onMessage, isSupported } from "firebase/messaging"
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -23,4 +24,44 @@ if (process.env.NODE_ENV === "development") {
   }
 }
 
+export const getFcmToken = async () => {
+  if (typeof window === "undefined") {
+    return null
+  }
+  const supported = await isSupported()
+  if (!supported) {
+    return null
+  }
+  try {
+    const messaging = getMessaging(app)
+    const token = await getToken(messaging, {
+      vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
+    })
+    return token
+  } catch (error) {
+    console.error("Error retrieving FCM token:", error)
+    return null
+  }
+}
+
+export const onMessageListener = async (callback: (payload: any) => void) => {
+  if (typeof window === "undefined") {
+    return () => {}
+  }
+  const supported = await isSupported()
+  if (!supported) {
+    return () => {}
+  }
+  try {
+    const messaging = getMessaging(app)
+    return onMessage(messaging, (payload) => {
+      callback(payload)
+    })
+  } catch (error) {
+    console.error("Error setting up message listener:", error)
+    return () => {}
+  }
+}
+
 export { app, auth }
+

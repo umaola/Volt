@@ -1,6 +1,7 @@
 import "./globals.css"
 import { ThemeProvider } from "@/components/theme-provider"
 import { QueryProvider } from "@/components/providers/query-provider"
+import { Toaster } from "@/components/ui/sonner"
 import { cn } from "@/lib/utils";
 
 export default function RootLayout({
@@ -19,6 +20,7 @@ export default function RootLayout({
           <QueryProvider>
             <div className="w-full max-w-[440px] min-h-screen flex flex-col bg-background shadow-md border-x border-border relative overflow-x-hidden">
               {children}
+              <Toaster />
             </div>
           </QueryProvider>
         </ThemeProvider>
@@ -26,3 +28,4 @@ export default function RootLayout({
     </html>
   )
 }
+

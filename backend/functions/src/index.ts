@@ -819,6 +819,22 @@ export const checkAndSendAlerts = onRequest({ cors: true }, async (request, resp
     }
 });
 
+function getRateForDate(rateData: any, targetDateStr: string): number {
+    const currentRate = rateData.rate_per_kwh ?? 209.50;
+    const history = rateData.history;
+    if (!Array.isArray(history) || history.length === 0) {
+        return currentRate;
+    }
+    const sorted = [...history].sort((a, b) => new Date(b.effective_from).getTime() - new Date(a.effective_from).getTime());
+    const targetTime = new Date(targetDateStr).getTime();
+    for (const entry of sorted) {
+        if (new Date(entry.effective_from).getTime() <= targetTime) {
+            return entry.rate ?? currentRate;
+        }
+    }
+    return sorted[sorted.length - 1].rate ?? currentRate;
+}
+
 export const getHistoryData = onRequest({ cors: true }, async (request, response) => {
     try {
         const uid = (request.query.uid as string) || request.body.uid;
@@ -869,27 +885,53 @@ export const getHistoryData = onRequest({ cors: true }, async (request, response
         if (dailyBurn === 0) dailyBurn = 4.3;
 
         const profileDoc = await db.collection("electricity_profiles").doc(uid).get();
+        let rateData: any = null;
         let tariffRate = 209.50;
         if (profileDoc.exists) {
             const profileData = profileDoc.data();
             const tariffBand = profileData?.tariff_band || "Band A";
-            const ratesMap: Record<string, number> = {
-                "Band A": 209.50,
-                "Band B": 62.50,
-                "Band C": 50.00,
-                "Band D": 37.50,
-                "Band E": 37.50
-            };
-            tariffRate = ratesMap[tariffBand] ?? 209.50;
+            const disco = profileData?.disco || "EKEDC";
+            try {
+                const ratesSnapshot = await db.collection("tariff_rates")
+                    .where("disco_id", "==", disco)
+                    .where("band", "==", tariffBand)
+                    .where("is_active", "==", true)
+                    .limit(1)
+                    .get();
+                if (!ratesSnapshot.empty) {
+                    rateData = ratesSnapshot.docs[0].data();
+                    tariffRate = rateData.rate_per_kwh ?? 209.50;
+                } else {
+                    const ratesMap: Record<string, number> = {
+                        "Band A": 209.50,
+                        "Band B": 62.50,
+                        "Band C": 50.00,
+                        "Band D": 37.50,
+                        "Band E": 37.50
+                    };
+                    tariffRate = ratesMap[tariffBand] ?? 209.50;
+                }
+            } catch (e) {
+                const ratesMap: Record<string, number> = {
+                    "Band A": 209.50,
+                    "Band B": 62.50,
+                    "Band C": 50.00,
+                    "Band D": 37.50,
+                    "Band E": 37.50
+                };
+                tariffRate = ratesMap[tariffBand] ?? 209.50;
+            }
         }
 
         const usageLogs: any[] = [];
         for (let i = 0; i < 7; i++) {
             const d = new Date();
             d.setDate(d.getDate() - i);
+            const dateStr = d.toISOString();
+            const dailyRate = rateData ? getRateForDate(rateData, dateStr) : tariffRate;
             const variance = 0.85 + Math.random() * 0.3;
             const unitsUsed = Number((dailyBurn * variance).toFixed(2));
-            const cost = Number((unitsUsed * tariffRate).toFixed(2));
+            const cost = Number((unitsUsed * dailyRate).toFixed(2));
             usageLogs.push({
                 date: d.toISOString().split("T")[0],
                 unitsUsed,
@@ -917,21 +959,43 @@ export const getInsightsData = onRequest({ cors: true }, async (request, respons
         }
 
         const profileDoc = await db.collection("electricity_profiles").doc(uid).get();
-        let tariffBand = "Band A";
+        let rateData: any = null;
+        let tariffRate = 209.50;
         if (profileDoc.exists) {
             const profileData = profileDoc.data();
-            tariffBand = profileData?.tariff_band || "Band A";
+            const tariffBand = profileData?.tariff_band || "Band A";
+            const disco = profileData?.disco || "EKEDC";
+            try {
+                const ratesSnapshot = await db.collection("tariff_rates")
+                    .where("disco_id", "==", disco)
+                    .where("band", "==", tariffBand)
+                    .where("is_active", "==", true)
+                    .limit(1)
+                    .get();
+                if (!ratesSnapshot.empty) {
+                    rateData = ratesSnapshot.docs[0].data();
+                    tariffRate = rateData.rate_per_kwh ?? 209.50;
+                } else {
+                    const ratesMap: Record<string, number> = {
+                        "Band A": 209.50,
+                        "Band B": 62.50,
+                        "Band C": 50.00,
+                        "Band D": 37.50,
+                        "Band E": 37.50
+                    };
+                    tariffRate = ratesMap[tariffBand] ?? 209.50;
+                }
+            } catch (e) {
+                const ratesMap: Record<string, number> = {
+                    "Band A": 209.50,
+                    "Band B": 62.50,
+                    "Band C": 50.00,
+                    "Band D": 37.50,
+                    "Band E": 37.50
+                };
+                tariffRate = ratesMap[tariffBand] ?? 209.50;
+            }
         }
-
-        let tariffRate = 209.50;
-        const ratesMap: Record<string, number> = {
-            "Band A": 209.50,
-            "Band B": 62.50,
-            "Band C": 50.00,
-            "Band D": 37.50,
-            "Band E": 37.50
-        };
-        tariffRate = ratesMap[tariffBand] ?? 209.50;
 
         const appliancesQuery = await db.collection("user_appliances")
             .where("user_id", "==", uid)
@@ -964,9 +1028,10 @@ export const getInsightsData = onRequest({ cors: true }, async (request, respons
             const d = new Date();
             d.setDate(d.getDate() - i);
             const dayName = days[d.getDay()];
+            const dailyRate = rateData ? getRateForDate(rateData, d.toISOString()) : tariffRate;
             const variance = 0.85 + Math.random() * 0.3;
             const kwh = Number((dailyBurn * variance).toFixed(2));
-            const cost = Number((kwh * tariffRate).toFixed(2));
+            const cost = Number((kwh * dailyRate).toFixed(2));
             dailyUsage.push({
                 label: dayName,
                 kwh,
@@ -976,9 +1041,12 @@ export const getInsightsData = onRequest({ cors: true }, async (request, respons
 
         const weeklyUsage: any[] = [];
         for (let i = 3; i >= 0; i--) {
+            const d = new Date();
+            d.setDate(d.getDate() - (i * 7));
+            const weeklyRate = rateData ? getRateForDate(rateData, d.toISOString()) : tariffRate;
             const variance = 0.9 + Math.random() * 0.2;
             const kwh = Number((dailyBurn * 7 * variance).toFixed(2));
-            const cost = Number((kwh * tariffRate).toFixed(2));
+            const cost = Number((kwh * weeklyRate).toFixed(2));
             weeklyUsage.push({
                 label: `Week ${4 - i}`,
                 kwh,
@@ -992,9 +1060,10 @@ export const getInsightsData = onRequest({ cors: true }, async (request, respons
             const d = new Date();
             d.setMonth(d.getMonth() - i);
             const monthName = months[d.getMonth()];
+            const monthlyRate = rateData ? getRateForDate(rateData, d.toISOString()) : tariffRate;
             const variance = 0.92 + Math.random() * 0.16;
             const kwh = Number((dailyBurn * 30 * variance).toFixed(2));
-            const cost = Number((kwh * tariffRate).toFixed(2));
+            const cost = Number((kwh * monthlyRate).toFixed(2));
             monthlyUsage.push({
                 label: monthName,
                 kwh,
@@ -1268,6 +1337,619 @@ export const verifyMeterNumber = onRequest({ cors: true }, async (request, respo
         }
     } catch (error) {
         logger.error("Error verifying meter number:", error);
+        response.status(500).send({ error: "Internal server error" });
+    }
+});
+
+export const seedTariffRates = onRequest({ cors: true }, async (request, response) => {
+    try {
+        const batch = db.batch();
+        const existingRates = await db.collection("tariff_rates").get();
+        for (const doc of existingRates.docs) {
+            batch.delete(doc.ref);
+        }
+
+        const ratesToSeed = [
+            { disco_id: "EKEDC", band: "Band A", rate_per_kwh: 209.50 },
+            { disco_id: "EKEDC", band: "Band B", rate_per_kwh: 62.50 },
+            { disco_id: "EKEDC", band: "Band C", rate_per_kwh: 48.00 },
+            { disco_id: "EKEDC", band: "Band D", rate_per_kwh: 37.50 },
+            { disco_id: "EKEDC", band: "Band E", rate_per_kwh: 32.00 },
+
+            { disco_id: "IKEDC", band: "Band A", rate_per_kwh: 206.80 },
+            { disco_id: "IKEDC", band: "Band B", rate_per_kwh: 63.20 },
+            { disco_id: "IKEDC", band: "Band C", rate_per_kwh: 49.50 },
+            { disco_id: "IKEDC", band: "Band D", rate_per_kwh: 38.00 },
+            { disco_id: "IKEDC", band: "Band E", rate_per_kwh: 33.00 },
+
+            { disco_id: "AEDC", band: "Band A", rate_per_kwh: 209.80 },
+            { disco_id: "AEDC", band: "Band B", rate_per_kwh: 64.00 },
+            { disco_id: "AEDC", band: "Band C", rate_per_kwh: 50.50 },
+            { disco_id: "AEDC", band: "Band D", rate_per_kwh: 39.00 },
+            { disco_id: "AEDC", band: "Band E", rate_per_kwh: 34.00 },
+
+            { disco_id: "EEDC", band: "Band A", rate_per_kwh: 211.00 },
+            { disco_id: "EEDC", band: "Band B", rate_per_kwh: 65.00 },
+            { disco_id: "EEDC", band: "Band C", rate_per_kwh: 52.00 },
+            { disco_id: "EEDC", band: "Band D", rate_per_kwh: 40.00 },
+            { disco_id: "EEDC", band: "Band E", rate_per_kwh: 35.00 },
+
+            { disco_id: "KEDCO", band: "Band A", rate_per_kwh: 208.00 },
+            { disco_id: "KEDCO", band: "Band B", rate_per_kwh: 61.50 },
+            { disco_id: "KEDCO", band: "Band C", rate_per_kwh: 48.50 },
+            { disco_id: "KEDCO", band: "Band D", rate_per_kwh: 36.00 },
+            { disco_id: "KEDCO", band: "Band E", rate_per_kwh: 31.00 },
+
+            { disco_id: "PHED", band: "Band A", rate_per_kwh: 209.90 },
+            { disco_id: "PHED", band: "Band B", rate_per_kwh: 63.50 },
+            { disco_id: "PHED", band: "Band C", rate_per_kwh: 50.00 },
+            { disco_id: "PHED", band: "Band D", rate_per_kwh: 38.00 },
+            { disco_id: "PHED", band: "Band E", rate_per_kwh: 33.00 },
+
+            { disco_id: "JED", band: "Band A", rate_per_kwh: 208.50 },
+            { disco_id: "JED", band: "Band B", rate_per_kwh: 62.00 },
+            { disco_id: "JED", band: "Band C", rate_per_kwh: 48.50 },
+            { disco_id: "JED", band: "Band D", rate_per_kwh: 37.00 },
+            { disco_id: "JED", band: "Band E", rate_per_kwh: 32.00 },
+
+            { disco_id: "IBEDC", band: "Band A", rate_per_kwh: 209.50 },
+            { disco_id: "IBEDC", band: "Band B", rate_per_kwh: 62.50 },
+            { disco_id: "IBEDC", band: "Band C", rate_per_kwh: 49.00 },
+            { disco_id: "IBEDC", band: "Band D", rate_per_kwh: 37.50 },
+            { disco_id: "IBEDC", band: "Band E", rate_per_kwh: 32.50 },
+
+            { disco_id: "KAEDCO", band: "Band A", rate_per_kwh: 207.00 },
+            { disco_id: "KAEDCO", band: "Band B", rate_per_kwh: 61.80 },
+            { disco_id: "KAEDCO", band: "Band C", rate_per_kwh: 48.20 },
+            { disco_id: "KAEDCO", band: "Band D", rate_per_kwh: 36.50 },
+            { disco_id: "KAEDCO", band: "Band E", rate_per_kwh: 31.50 },
+
+            { disco_id: "BEDC", band: "Band A", rate_per_kwh: 209.50 },
+            { disco_id: "BEDC", band: "Band B", rate_per_kwh: 62.50 },
+            { disco_id: "BEDC", band: "Band C", rate_per_kwh: 49.00 },
+            { disco_id: "BEDC", band: "Band D", rate_per_kwh: 37.50 },
+            { disco_id: "BEDC", band: "Band E", rate_per_kwh: 32.50 },
+
+            { disco_id: "ABA", band: "Band A", rate_per_kwh: 210.00 },
+            { disco_id: "ABA", band: "Band B", rate_per_kwh: 63.00 },
+            { disco_id: "ABA", band: "Band C", rate_per_kwh: 49.50 },
+            { disco_id: "ABA", band: "Band D", rate_per_kwh: 38.00 },
+            { disco_id: "ABA", band: "Band E", rate_per_kwh: 33.00 },
+
+            { disco_id: "YEDC", band: "Band A", rate_per_kwh: 209.00 },
+            { disco_id: "YEDC", band: "Band B", rate_per_kwh: 62.00 },
+            { disco_id: "YEDC", band: "Band C", rate_per_kwh: 48.00 },
+            { disco_id: "YEDC", band: "Band D", rate_per_kwh: 37.00 },
+            { disco_id: "YEDC", band: "Band E", rate_per_kwh: 32.00 }
+        ];
+
+        for (const item of ratesToSeed) {
+            const ref = db.collection("tariff_rates").doc(`${item.disco_id}_${item.band.replace(/\s+/g, "")}`);
+            batch.set(ref, {
+                disco_id: item.disco_id,
+                band: item.band,
+                rate_per_kwh: item.rate_per_kwh,
+                is_active: true,
+                created_at: new Date().toISOString(),
+                history: [
+                    {
+                        rate: item.rate_per_kwh,
+                        effective_from: new Date().toISOString()
+                    }
+                ]
+            });
+        }
+
+        await batch.commit();
+        response.status(200).send({ success: true, count: ratesToSeed.length });
+    } catch (error) {
+        logger.error("Error seeding tariff rates:", error);
+        response.status(500).send({ error: "Internal server error" });
+    }
+});
+
+export const updateTariffRate = onRequest({ cors: true }, async (request, response) => {
+    try {
+        const { disco, band, rate } = request.body;
+        if (!disco || !band || rate === undefined) {
+            response.status(400).send({ error: "Missing required fields" });
+            return;
+        }
+
+        const docId = `${disco}_${band.replace(/\s+/g, "")}`;
+        const docRef = db.collection("tariff_rates").doc(docId);
+        const doc = await docRef.get();
+        const now = new Date();
+
+        let shouldNotify = false;
+        let oldRate = 0;
+
+        if (doc.exists) {
+            const docData = doc.data()!;
+            oldRate = docData.rate_per_kwh ?? 0;
+            if (oldRate !== Number(rate)) {
+                shouldNotify = true;
+                const history = Array.isArray(docData.history) ? [...docData.history] : [];
+                history.push({
+                    rate: Number(rate),
+                    effective_from: now.toISOString()
+                });
+                await docRef.update({
+                    rate_per_kwh: Number(rate),
+                    updated_at: now.toISOString(),
+                    history
+                });
+            }
+        } else {
+            const history = [{
+                rate: Number(rate),
+                effective_from: now.toISOString()
+            }];
+            await docRef.set({
+                disco_id: disco,
+                band,
+                rate_per_kwh: Number(rate),
+                is_active: true,
+                created_at: now.toISOString(),
+                updated_at: now.toISOString(),
+                history
+            });
+        }
+
+        if (shouldNotify) {
+            const { getMessaging } = await import("firebase-admin/messaging");
+            const profilesSnapshot = await db.collection("electricity_profiles")
+                .where("disco", "==", disco)
+                .where("tariff_band", "==", band)
+                .get();
+
+            const batch = db.batch();
+            const alertTitle = `${disco} ${band} Tariff Update`;
+            const alertBody = `Your tariff rate has been updated from ₦${oldRate.toFixed(2)} to ₦${Number(rate).toFixed(2)}/kWh.`;
+
+            for (const profileDoc of profilesSnapshot.docs) {
+                const profile = profileDoc.data();
+                const uid = profile.user_id;
+                if (!uid) continue;
+
+                const notifId = db.collection("notifications").doc().id;
+                const notifRef = db.collection("notifications").doc(notifId);
+                batch.set(notifRef, {
+                    id: notifId,
+                    user_id: uid,
+                    title: alertTitle,
+                    body: alertBody,
+                    notification_type: "tariff_adjustment",
+                    status: "sent",
+                    sent_at: now.toISOString(),
+                    created_at: now.toISOString()
+                });
+
+                const tokensSnapshot = await db.collection("device_tokens")
+                    .where("user_id", "==", uid)
+                    .get();
+
+                for (const tokenDoc of tokensSnapshot.docs) {
+                    const token = tokenDoc.data().device_token;
+                    if (token) {
+                        try {
+                            await getMessaging().send({
+                                notification: {
+                                    title: alertTitle,
+                                    body: alertBody
+                                },
+                                token
+                            });
+                        } catch (fcmError) {
+                            logger.warn(`FCM message fail for token ${token}:`, fcmError);
+                        }
+                    }
+                }
+            }
+            await batch.commit();
+        }
+
+        response.status(200).send({ success: true, updated: shouldNotify });
+    } catch (error) {
+        logger.error("Error updating tariff rate:", error);
+        response.status(500).send({ error: "Internal server error" });
+    }
+});
+
+function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const toRad = (value: number) => (value * Math.PI) / 180;
+    const R = 6371;
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const rLat1 = toRad(lat1);
+    const rLat2 = toRad(lat2);
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(rLat1) * Math.cos(rLat2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+}
+
+export const reportOutage = onRequest({ cors: true }, async (request, response) => {
+    try {
+        const { uid, latitude, longitude, state, city } = request.body;
+        if (!uid || !state || !city) {
+            response.status(400).send({ error: "Missing required fields" });
+            return;
+        }
+
+        const lat = Number(latitude) || 0;
+        const lon = Number(longitude) || 0;
+        const now = new Date();
+
+        const reportId = db.collection("outage_reports").doc().id;
+        const reportRef = db.collection("outage_reports").doc(reportId);
+        await reportRef.set({
+            id: reportId,
+            user_id: uid,
+            status: "outage",
+            state,
+            city,
+            latitude: lat,
+            longitude: lon,
+            created_at: now.toISOString()
+        });
+
+        const fifteenMinsAgo = new Date(now.getTime() - 15 * 60 * 1000);
+        const recentReportsQuery = await db.collection("outage_reports")
+            .where("state", "==", state)
+            .where("city", "==", city)
+            .where("status", "==", "outage")
+            .where("created_at", ">=", fifteenMinsAgo.toISOString())
+            .get();
+
+        const distinctUsers = new Set<string>();
+
+        for (const doc of recentReportsQuery.docs) {
+            const data = doc.data();
+            const distance = (lat !== 0 && lon !== 0 && data.latitude !== 0 && data.longitude !== 0) 
+                ? calculateDistance(lat, lon, data.latitude, data.longitude)
+                : 0;
+
+            if (distance <= 1.0) {
+                distinctUsers.add(data.user_id);
+            }
+        }
+
+        if (distinctUsers.size >= 3) {
+            const clusterId = `${state}_${city}`.replace(/\s+/g, "");
+            const gridStateRef = db.collection("grid_states").doc(clusterId);
+            const gridStateDoc = await gridStateRef.get();
+
+            let alreadyDown = false;
+            if (gridStateDoc.exists && gridStateDoc.data()?.state === "GRID_DOWN") {
+                alreadyDown = true;
+            }
+
+            if (!alreadyDown) {
+                await gridStateRef.set({
+                    id: clusterId,
+                    state: "GRID_DOWN",
+                    updated_at: now.toISOString()
+                });
+
+                const profilesSnapshot = await db.collection("electricity_profiles")
+                    .where("state", "==", state)
+                    .where("city", "==", city)
+                    .get();
+
+                const matchedUserIds: string[] = [];
+                for (const profileDoc of profilesSnapshot.docs) {
+                    const data = profileDoc.data();
+                    if (data.user_id && data.user_id !== uid) {
+                        matchedUserIds.push(data.user_id);
+                    }
+                }
+
+                if (matchedUserIds.length > 0) {
+                    const { getMessaging } = await import("firebase-admin/messaging");
+                    const batch = db.batch();
+                    const alertTitle = "Power Outage Alert";
+                    const alertBody = "Grid Failure Detected: Power has tripped in your region.";
+
+                    for (const neighborUid of matchedUserIds) {
+                        const notifId = db.collection("notifications").doc().id;
+                        const notifRef = db.collection("notifications").doc(notifId);
+                        batch.set(notifRef, {
+                            id: notifId,
+                            user_id: neighborUid,
+                            title: alertTitle,
+                            body: alertBody,
+                            notification_type: "grid_down_alert",
+                            status: "sent",
+                            sent_at: now.toISOString(),
+                            created_at: now.toISOString()
+                        });
+
+                        const tokensSnapshot = await db.collection("device_tokens")
+                            .where("user_id", "==", neighborUid)
+                            .get();
+
+                        for (const tokenDoc of tokensSnapshot.docs) {
+                            const token = tokenDoc.data().device_token;
+                            if (token) {
+                                try {
+                                    await getMessaging().send({
+                                        notification: {
+                                            title: alertTitle,
+                                            body: alertBody
+                                        },
+                                        token
+                                    });
+                                } catch (fcmError) {
+                                    logger.warn(`FCM message fail for token ${token}:`, fcmError);
+                                }
+                            }
+                        }
+                    }
+
+                    const reportersList = Array.from(distinctUsers);
+                    for (const reporterUid of reportersList) {
+                        const profileRef = db.collection("electricity_profiles").doc(reporterUid);
+                        const profDoc = await profileRef.get();
+                        if (profDoc.exists) {
+                            const currentWarned = profDoc.data()?.neighbors_warned ?? 0;
+                            await profileRef.update({
+                                neighbors_warned: currentWarned + matchedUserIds.length
+                            });
+                        }
+                    }
+
+                    const reporterNotifId = db.collection("notifications").doc().id;
+                    const reporterNotifRef = db.collection("notifications").doc(reporterNotifId);
+                    batch.set(reporterNotifRef, {
+                        id: reporterNotifId,
+                        user_id: uid,
+                        title: "Neighbors Warned!",
+                        body: `Your report just warned ${matchedUserIds.length} people in ${city}. You saved them from wasting fuel today.`,
+                        notification_type: "community_hero",
+                        status: "sent",
+                        sent_at: now.toISOString(),
+                        created_at: now.toISOString()
+                    });
+
+                    await batch.commit();
+                }
+            }
+        }
+
+        response.status(200).send({ success: true });
+    } catch (error) {
+        logger.error("Error reporting outage:", error);
+        response.status(500).send({ error: "Internal server error" });
+    }
+});
+
+export const reportPowerBack = onRequest({ cors: true }, async (request, response) => {
+    try {
+        const { uid, latitude, longitude, state, city } = request.body;
+        if (!uid || !state || !city) {
+            response.status(400).send({ error: "Missing required fields" });
+            return;
+        }
+
+        const lat = Number(latitude) || 0;
+        const lon = Number(longitude) || 0;
+        const now = new Date();
+
+        const reportId = db.collection("outage_reports").doc().id;
+        const reportRef = db.collection("outage_reports").doc(reportId);
+        await reportRef.set({
+            id: reportId,
+            user_id: uid,
+            status: "power_back",
+            state,
+            city,
+            latitude: lat,
+            longitude: lon,
+            created_at: now.toISOString()
+        });
+
+        const fifteenMinsAgo = new Date(now.getTime() - 15 * 60 * 1000);
+        const recentReportsQuery = await db.collection("outage_reports")
+            .where("state", "==", state)
+            .where("city", "==", city)
+            .where("status", "==", "power_back")
+            .where("created_at", ">=", fifteenMinsAgo.toISOString())
+            .get();
+
+        const distinctUsers = new Set<string>();
+        for (const doc of recentReportsQuery.docs) {
+            const data = doc.data();
+            const distance = (lat !== 0 && lon !== 0 && data.latitude !== 0 && data.longitude !== 0) 
+                ? calculateDistance(lat, lon, data.latitude, data.longitude)
+                : 0;
+
+            if (distance <= 1.0) {
+                distinctUsers.add(data.user_id);
+            }
+        }
+
+        if (distinctUsers.size >= 3) {
+            const clusterId = `${state}_${city}`.replace(/\s+/g, "");
+            const gridStateRef = db.collection("grid_states").doc(clusterId);
+            const gridStateDoc = await gridStateRef.get();
+
+            let alreadyActive = false;
+            if (gridStateDoc.exists && gridStateDoc.data()?.state === "GRID_ACTIVE") {
+                alreadyActive = true;
+            }
+
+            if (!alreadyActive) {
+                await gridStateRef.set({
+                    id: clusterId,
+                    state: "GRID_ACTIVE",
+                    updated_at: now.toISOString()
+                });
+
+                const profilesSnapshot = await db.collection("electricity_profiles")
+                    .where("state", "==", state)
+                    .where("city", "==", city)
+                    .get();
+
+                const matchedUserIds: string[] = [];
+                for (const profileDoc of profilesSnapshot.docs) {
+                    const data = profileDoc.data();
+                    if (data.user_id && data.user_id !== uid) {
+                        matchedUserIds.push(data.user_id);
+                    }
+                }
+
+                if (matchedUserIds.length > 0) {
+                    const { getMessaging } = await import("firebase-admin/messaging");
+                    const batch = db.batch();
+                    const alertTitle = "Power Restored";
+                    const alertBody = "Power is back. Maximize your window.";
+
+                    for (const neighborUid of matchedUserIds) {
+                        const notifId = db.collection("notifications").doc().id;
+                        const notifRef = db.collection("notifications").doc(notifId);
+                        batch.set(notifRef, {
+                            id: notifId,
+                            user_id: neighborUid,
+                            title: alertTitle,
+                            body: alertBody,
+                            notification_type: "grid_up_alert",
+                            status: "sent",
+                            sent_at: now.toISOString(),
+                            created_at: now.toISOString()
+                        });
+
+                        const tokensSnapshot = await db.collection("device_tokens")
+                            .where("user_id", "==", neighborUid)
+                            .get();
+
+                        for (const tokenDoc of tokensSnapshot.docs) {
+                            const token = tokenDoc.data().device_token;
+                            if (token) {
+                                try {
+                                    await getMessaging().send({
+                                        notification: {
+                                            title: alertTitle,
+                                            body: alertBody
+                                        },
+                                        token
+                                    });
+                                } catch (fcmError) {
+                                    logger.warn(`FCM message fail for token ${token}:`, fcmError);
+                                }
+                            }
+                        }
+                    }
+                    await batch.commit();
+                }
+            }
+        }
+
+        response.status(200).send({ success: true });
+    } catch (error) {
+        logger.error("Error reporting power back:", error);
+        response.status(500).send({ error: "Internal server error" });
+    }
+});
+
+export const getOutageMap = onRequest({ cors: true }, async (request, response) => {
+    try {
+        const uid = request.query.uid as string;
+        let state = request.query.state as string;
+        let city = request.query.city as string;
+
+        if (uid && (!state || !city)) {
+            const profileDoc = await db.collection("electricity_profiles").doc(uid).get();
+            if (profileDoc.exists) {
+                state = profileDoc.data()?.state || "";
+                city = profileDoc.data()?.city || "";
+            }
+        }
+
+        if (!state || !city) {
+            response.status(400).send({ error: "Missing location parameters" });
+            return;
+        }
+
+        const clusterId = `${state}_${city}`.replace(/\s+/g, "");
+        const gridStateDoc = await db.collection("grid_states").doc(clusterId).get();
+        const gridState = gridStateDoc.exists ? (gridStateDoc.data()?.state || "GRID_ACTIVE") : "GRID_ACTIVE";
+
+        const recentReportsQuery = await db.collection("outage_reports")
+            .where("state", "==", state)
+            .where("city", "==", city)
+            .limit(10)
+            .get();
+
+        const reports = recentReportsQuery.docs.map(doc => {
+            const data = doc.data();
+            return {
+                id: doc.id,
+                status: data.status,
+                latitude: data.latitude,
+                longitude: data.longitude,
+                created_at: data.created_at
+            };
+        });
+
+        response.status(200).send({
+            gridState,
+            reports
+        });
+    } catch (error) {
+        logger.error("Error fetching outage map:", error);
+        response.status(500).send({ error: "Internal server error" });
+    }
+});
+
+export const exportOutageHistory = onRequest({ cors: true }, async (request, response) => {
+    try {
+        const uid = (request.query.uid as string) || request.body.uid;
+        const days = Number(request.query.days || request.body.days) || 30;
+
+        if (!uid) {
+            response.status(400).send({ error: "Missing uid" });
+            return;
+        }
+
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - days);
+
+        const logsQuery = await db.collection("power_supply_logs")
+            .where("user_id", "==", uid)
+            .where("power_on", ">=", cutoff.toISOString())
+            .get();
+
+        let totalSupplyHours = 0;
+        const events: any[] = [];
+
+        logsQuery.docs.forEach(doc => {
+            const data = doc.data();
+            const duration = data.duration_hours || 0;
+            totalSupplyHours += duration;
+            events.push({
+                id: doc.id,
+                powerOn: data.power_on,
+                powerOff: data.power_off || null,
+                duration
+            });
+        });
+
+        events.sort((a, b) => new Date(b.powerOn).getTime() - new Date(a.powerOn).getTime());
+
+        const totalDowntimeHours = Math.max(0, (days * 24) - totalSupplyHours);
+        const avgDailySupply = Number((totalSupplyHours / days).toFixed(1));
+
+        response.status(200).send({
+            userId: uid,
+            periodDays: days,
+            totalSupplyHours: Number(totalSupplyHours.toFixed(1)),
+            totalDowntimeHours: Number(totalDowntimeHours.toFixed(1)),
+            avgDailySupplyHours: avgDailySupply,
+            events
+        });
+    } catch (error) {
+        logger.error("Error exporting outage history:", error);
         response.status(500).send({ error: "Internal server error" });
     }
 });
