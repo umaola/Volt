@@ -352,13 +352,13 @@ export function DevicesPage({
 
                           <button
                             onClick={() => onToggleDevice(app.name)}
-                            className={`w-11 h-6 rounded-full p-0.5 transition-colors duration-300 relative focus:outline-none shrink-0 ${
+                            className={`w-9 h-5 rounded-full p-0.5 transition-colors duration-300 relative focus:outline-none shrink-0 ${
                               isActive ? "bg-[#00BF63]" : "bg-zinc-200"
                             }`}
                           >
                             <div
-                              className={`w-5 h-5 rounded-full bg-white shadow-sm transition-transform duration-300 transform ${
-                                isActive ? "translate-x-5" : "translate-x-0"
+                              className={`w-4 h-4 rounded-full bg-white shadow-sm transition-transform duration-300 transform ${
+                                isActive ? "translate-x-4" : "translate-x-0"
                               }`}
                             />
                           </button>

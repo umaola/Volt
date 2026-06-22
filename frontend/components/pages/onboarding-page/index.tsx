@@ -17,6 +17,7 @@ interface OnboardingPageProps {
     meterType: string
     appliances: { name: string; wattage: number; hours: number }[]
     currentUnits: number
+    powerState: "on" | "off"
   }) => void
   onVerifyMeter: (
     meterNumber: string,
@@ -46,6 +47,7 @@ export function OnboardingPage({
   >([])
 
   const [currentUnits, setCurrentUnits] = React.useState("")
+  const [powerState, setPowerState] = React.useState<"on" | "off">("off")
 
   const [customAppliances, setCustomAppliances] = React.useState<
     { name: string; defaultWattage: number; defaultHours: number }[]
@@ -148,7 +150,8 @@ export function OnboardingPage({
         tariffBand,
         meterType,
         appliances: selectedAppliances,
-        currentUnits: parseFloat(currentUnits) || 0
+        currentUnits: parseFloat(currentUnits) || 0,
+        powerState
       })
     }
   }

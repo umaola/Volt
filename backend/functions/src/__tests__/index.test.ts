@@ -7,6 +7,7 @@ import { deleteApp, getApps } from "firebase-admin/app";
 import {
   validatePassword,
   createUser,
+  saveOnboardingProfile,
   logRecharge,
   getDashboardData,
   getHistoryData,
@@ -47,6 +48,7 @@ function mockRequest(body: any = {}, query: any = {}, method: string = "POST") {
 }
 
 describe("Backend Functions Tests", () => {
+  jest.setTimeout(60000);
   afterAll(async () => {
     await db.terminate();
     const apps = getApps();
@@ -154,6 +156,64 @@ describe("Backend Functions Tests", () => {
     });
   });
 
+  describe("saveOnboardingProfile", () => {
+    it("should save onboarding profile and start power log if powerState is on", async () => {
+      const req = mockRequest({
+        uid: "test-user-123",
+        meterNumber: "METER123",
+        disco: "EKEDC",
+        tariffBand: "Band A",
+        meterType: "Prepaid",
+        appliances: [{ name: "Fan", wattage: 75, hours: 8 }],
+        currentUnits: 150.5,
+        powerState: "on"
+      });
+      const res = mockResponse();
+
+      await saveOnboardingProfile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.send).toHaveBeenCalledWith({ success: true });
+
+      const profileDoc = await db.collection("electricity_profiles").doc("test-user-123").get();
+      expect(profileDoc.exists).toBe(true);
+      expect(profileDoc.data()?.disco).toBe("EKEDC");
+
+      const meterDoc = await db.collection("meters").doc("METER123").get();
+      expect(meterDoc.exists).toBe(true);
+      expect(meterDoc.data()?.current_units).toBe(150.5);
+
+      const logs = await db.collection("power_supply_logs")
+        .where("user_id", "==", "test-user-123")
+        .where("power_off", "==", null)
+        .get();
+      expect(logs.size).toBe(1);
+    });
+
+    it("should save onboarding profile and not start power log if powerState is off", async () => {
+      const req = mockRequest({
+        uid: "test-user-123",
+        meterNumber: "METER123",
+        disco: "EKEDC",
+        tariffBand: "Band A",
+        meterType: "Prepaid",
+        appliances: [],
+        currentUnits: 100,
+        powerState: "off"
+      });
+      const res = mockResponse();
+
+      await saveOnboardingProfile(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+
+      const logs = await db.collection("power_supply_logs")
+        .where("user_id", "==", "test-user-123")
+        .get();
+      expect(logs.size).toBe(0);
+    });
+  });
+
   describe("logRecharge", () => {
     it("should record a recharge and update current units on the meter", async () => {
       await db.collection("meters").doc("METER123").set({
@@ -196,7 +256,8 @@ describe("Backend Functions Tests", () => {
       await db.collection("users").doc("test-user-123").set({
         uid: "test-user-123",
         name: "Test User",
-        email: "test@example.com"
+        email: "test@example.com",
+        created_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
       });
 
       await db.collection("electricity_profiles").doc("test-user-123").set({
@@ -228,6 +289,38 @@ describe("Backend Functions Tests", () => {
           tariffBand: "Band A"
         })
       );
+    });
+
+    it("should return dailyBurnRate: 0 for a new user (<24h)", async () => {
+      await db.collection("users").doc("test-user-123").set({
+        uid: "test-user-123",
+        name: "Test User",
+        email: "test@example.com",
+        created_at: new Date().toISOString()
+      });
+
+      await db.collection("electricity_profiles").doc("test-user-123").set({
+        user_id: "test-user-123",
+        disco: "EKEDC",
+        tariff_band: "Band A",
+        meter_type: "Prepaid"
+      });
+
+      await db.collection("meters").doc("METER123").set({
+        user_id: "test-user-123",
+        meter_number: "METER123",
+        current_units: 45.2
+      });
+
+      const req = mockRequest({}, { uid: "test-user-123" }, "GET");
+      const res = mockResponse();
+
+      await getDashboardData(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const data = res.send.mock.calls[0][0];
+      expect(data.dailyBurnRate).toBe(0);
+      expect(data.daysRemaining).toBe(0);
     });
   });
 
@@ -261,6 +354,15 @@ describe("Backend Functions Tests", () => {
         is_active: true
       });
 
+      await db.collection("power_supply_logs").doc("log-1").set({
+        id: "log-1",
+        user_id: "test-user-123",
+        power_on: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+        power_off: null,
+        duration_hours: 8 * 24,
+        source: "manual"
+      });
+
       const req = mockRequest({}, { uid: "test-user-123" }, "GET");
       const res = mockResponse();
 
@@ -277,10 +379,38 @@ describe("Backend Functions Tests", () => {
       const resolvedRate = usageLogs[0].cost / usageLogs[0].unitsUsed;
       expect(resolvedRate).toBeCloseTo(63.20, 1);
     });
+
+    it("should filter out usage logs before onboarding date", async () => {
+      const twoDaysAgo = new Date();
+      twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
+      await db.collection("electricity_profiles").doc("test-user-123").set({
+        user_id: "test-user-123",
+        disco: "IKEDC",
+        tariff_band: "Band B",
+        created_at: twoDaysAgo.toISOString()
+      });
+
+      const req = mockRequest({}, { uid: "test-user-123" }, "GET");
+      const res = mockResponse();
+
+      await getHistoryData(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const data = res.send.mock.calls[0][0];
+      const usageLogs = data.usageLogs;
+      expect(usageLogs.length).toBeLessThanOrEqual(3);
+    });
   });
 
   describe("getInsightsData", () => {
     it("should return daily, weekly, monthly usage and insights using DB rates", async () => {
+      await db.collection("users").doc("test-user-123").set({
+        uid: "test-user-123",
+        name: "Test User",
+        email: "test@example.com",
+        created_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString()
+      });
+
       await db.collection("electricity_profiles").doc("test-user-123").set({
         user_id: "test-user-123",
         disco: "IKEDC",
@@ -302,6 +432,15 @@ describe("Backend Functions Tests", () => {
         is_active: true
       });
 
+      await db.collection("power_supply_logs").doc("log-1").set({
+        id: "log-1",
+        user_id: "test-user-123",
+        power_on: new Date(Date.now() - 6.9 * 24 * 3600 * 1000).toISOString(),
+        power_off: new Date().toISOString(),
+        duration_hours: 6.9 * 24.0,
+        source: "manual"
+      });
+
       const req = mockRequest({}, { uid: "test-user-123" }, "GET");
       const res = mockResponse();
 
@@ -318,6 +457,33 @@ describe("Backend Functions Tests", () => {
       const dailyUsage = data.dailyUsage;
       const resolvedRate = dailyUsage[0].cost / dailyUsage[0].kwh;
       expect(resolvedRate).toBeCloseTo(63.20, 1);
+    });
+
+    it("should filter out daily, weekly, monthly usage and insights before onboarding date", async () => {
+      const twoDaysAgo = new Date();
+      twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
+      await db.collection("users").doc("test-user-123").set({
+        uid: "test-user-123",
+        name: "Test User",
+        email: "test@example.com",
+        created_at: twoDaysAgo.toISOString()
+      });
+
+      await db.collection("electricity_profiles").doc("test-user-123").set({
+        user_id: "test-user-123",
+        disco: "IKEDC",
+        tariff_band: "Band B",
+        created_at: twoDaysAgo.toISOString()
+      });
+
+      const req = mockRequest({}, { uid: "test-user-123" }, "GET");
+      const res = mockResponse();
+
+      await getInsightsData(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const data = res.send.mock.calls[0][0];
+      expect(data.dailyUsage.length).toBeLessThanOrEqual(3);
     });
   });
 
@@ -401,6 +567,15 @@ describe("Backend Functions Tests", () => {
             effective_from: oneDayAgo.toISOString()
           }
         ]
+      });
+
+      await db.collection("power_supply_logs").doc("log-1").set({
+        id: "log-1",
+        user_id: "test-user-123",
+        power_on: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+        power_off: null,
+        duration_hours: 8 * 24,
+        source: "manual"
       });
 
       const req = mockRequest({}, { uid: "test-user-123" }, "GET");

@@ -2,7 +2,7 @@ import * as React from "react"
 import { TextField } from "@/components/design-system/input"
 import { PrimaryButton } from "@/components/design-system/button"
 import { StandardCard } from "@/components/design-system/card"
-import { IconBolt, IconCalendar, IconCoins, IconCheck, IconX } from "@tabler/icons-react"
+import { IconBolt, IconCalendar, IconCoins, IconCheck, IconX, IconAlertCircle, IconEdit, IconTrash } from "@tabler/icons-react"
 import { Skeleton } from "@/components/ui/skeleton"
 
 export interface Recharge {
@@ -17,6 +17,8 @@ interface CalculatorPageProps {
   tariffRate: number
   burnRate: number
   onSaveRecharge: (amount: number, units: number) => void
+  onEditRecharge?: (id: string, amount: number, units: number) => void
+  onDeleteRecharge?: (id: string) => void
   isLoading: boolean
   isSubmitting?: boolean
   recharges: Recharge[]
@@ -27,6 +29,8 @@ export function CalculatorPage({
   tariffRate,
   burnRate,
   onSaveRecharge,
+  onEditRecharge,
+  onDeleteRecharge,
   isLoading,
   isSubmitting = false,
   recharges = [],
@@ -37,6 +41,11 @@ export function CalculatorPage({
   const [showSuccess, setShowSuccess] = React.useState(false)
   const prevSubmitting = React.useRef(isSubmitting)
   const [mounted, setMounted] = React.useState(false)
+
+  const [customUnits, setCustomUnits] = React.useState("")
+  const [editingId, setEditingId] = React.useState<string | null>(null)
+  const [editAmount, setEditAmount] = React.useState("")
+  const [editUnits, setEditUnits] = React.useState("")
 
   React.useEffect(() => {
     setMounted(true)
@@ -50,6 +59,34 @@ export function CalculatorPage({
     }
     prevSubmitting.current = isSubmitting
   }, [isSubmitting])
+
+  React.useEffect(() => {
+    const parsed = parseFloat(amount) || 0
+    if (parsed > 0) {
+      setCustomUnits((parsed / tariffRate).toFixed(2))
+    } else {
+      setCustomUnits("")
+    }
+  }, [amount, tariffRate])
+
+  const startEdit = (item: Recharge) => {
+    setEditingId(item.id)
+    setEditAmount(item.amount.toString())
+    setEditUnits(item.units.toString())
+  }
+
+  const handleSaveEdit = () => {
+    if (editingId && editAmount && editUnits && onEditRecharge) {
+      onEditRecharge(editingId, Number(editAmount), Number(editUnits))
+      setEditingId(null)
+    }
+  }
+
+  const handleDelete = (id: string) => {
+    if (onDeleteRecharge) {
+      onDeleteRecharge(id)
+    }
+  }
 
   const filteredRecharges = React.useMemo(() => {
     if (!mounted) return []
@@ -136,7 +173,7 @@ export function CalculatorPage({
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault()
     if (parsedAmount > 0) {
-      onSaveRecharge(parsedAmount, estimatedUnits)
+      onSaveRecharge(parsedAmount, parseFloat(customUnits) || estimatedUnits)
       setAmount("")
     }
   }
@@ -176,23 +213,30 @@ export function CalculatorPage({
             <div className="flex flex-col gap-3 animate-fade-in">
               <StandardCard className="bg-emerald-50/20 border-emerald-100/50 flex flex-col gap-4">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-emerald-50 border border-primary flex items-center justify-center text-primary">
+                  <div className="w-10 h-10 rounded-full bg-emerald-50 border border-primary flex items-center justify-center text-primary shrink-0">
                     <IconBolt className="w-5 h-5" />
                   </div>
-                  <div className="flex flex-col">
-                    <span className="text-xs text-[#4B5563]">Estimated Units</span>
-                    <span className="text-xl font-bold text-primary">{estimatedUnits.toFixed(2)} kWh</span>
+                  <div className="flex-1 flex flex-col">
+                    <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Actual Units Received (kWh)</span>
+                    <TextField
+                      placeholder="e.g. 266.67"
+                      type="number"
+                      value={customUnits}
+                      onChange={(e) => setCustomUnits(e.target.value)}
+                      disabled={isLoading || isSubmitting}
+                      className="h-9 text-sm"
+                    />
                   </div>
                 </div>
 
                 <div className="flex items-center gap-3 border-t border-emerald-100/40 pt-3">
-                  <div className="w-10 h-10 rounded-full bg-emerald-50 border border-primary flex items-center justify-center text-primary">
+                  <div className="w-10 h-10 rounded-full bg-emerald-50 border border-primary flex items-center justify-center text-primary shrink-0">
                     <IconCalendar className="w-5 h-5" />
                   </div>
                   <div className="flex flex-col">
                     <span className="text-xs text-[#4B5563]">Estimated Duration</span>
                     <span className="text-sm font-bold text-[#121212]">
-                      Approximately {estimatedDays > 0 ? Math.round(estimatedDays) : "--"} Days
+                      Approximately {estimatedDays > 0 ? Math.round((parseFloat(customUnits) || estimatedUnits) / burnRate) : "--"} Days
                     </span>
                   </div>
                 </div>
@@ -204,6 +248,14 @@ export function CalculatorPage({
             </div>
           )}
         </form>
+
+        <div className="flex items-start gap-2 px-2">
+          <IconAlertCircle className="w-3.5 h-3.5 text-[#EF4444] shrink-0 mt-0.5" />
+          <p className="text-[10px] text-zinc-400 dark:text-zinc-500 leading-normal">
+            Calculations are estimates based on your tariff band rate and average burn rate. Actual units received and duration may vary due to DisCo fees, VAT, NERC adjustments, or changes in appliance usage.{" "}
+            <a href="#" className="text-[#00BF63] hover:underline font-bold">Learn more</a>
+          </p>
+        </div>
 
         <div className="flex flex-col gap-4 border-t border-zinc-200 pt-6">
           <div className="flex flex-col">
@@ -252,29 +304,87 @@ export function CalculatorPage({
                   filteredRecharges.map(item => (
                     <div
                       key={item.id}
-                      className="bg-white border border-[#F3F4F6] rounded-xl p-4 flex items-center justify-between shadow-sm hover:border-zinc-200 transition-colors"
+                      className="bg-white border border-[#F3F4F6] rounded-xl p-4 flex flex-col gap-3 shadow-sm hover:border-zinc-200 transition-colors"
                     >
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-full bg-emerald-50 border border-emerald-100 flex items-center justify-center text-[#00BF63]">
-                          <IconCoins className="w-5 h-5" />
+                      {editingId === item.id ? (
+                        <div className="flex flex-col gap-3">
+                          <div className="flex justify-between items-center border-b border-zinc-100 pb-1.5 mb-1">
+                            <span className="text-xs font-bold text-[#121212]">Edit Recharge Log</span>
+                            <div className="flex items-center gap-2">
+                              <button onClick={handleSaveEdit} className="text-[#00BF63] hover:text-emerald-700" disabled={isSubmitting}>
+                                <IconCheck className="w-4 h-4" />
+                              </button>
+                              <button onClick={() => setEditingId(null)} className="text-red-500 hover:text-red-700" disabled={isSubmitting}>
+                                <IconX className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-3">
+                            <TextField
+                              label="Amount (₦)"
+                              type="number"
+                              value={editAmount}
+                              onChange={(e) => setEditAmount(e.target.value)}
+                              disabled={isSubmitting}
+                            />
+                            <TextField
+                              label="Units (kWh)"
+                              type="number"
+                              value={editUnits}
+                              onChange={(e) => setEditUnits(e.target.value)}
+                              disabled={isSubmitting}
+                            />
+                          </div>
                         </div>
-                        <div className="flex flex-col">
-                          <span className="text-sm font-bold text-[#121212]">
-                            ₦{item.amount.toLocaleString()}
-                          </span>
-                          <span className="text-[11px] text-[#4B5563]">
-                            {formatDateTime(item.date)}
-                          </span>
+                      ) : (
+                        <div className="flex flex-col gap-2.5">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-full bg-emerald-50 border border-emerald-100 flex items-center justify-center text-[#00BF63] shrink-0">
+                                <IconCoins className="w-5 h-5" />
+                              </div>
+                              <div className="flex flex-col">
+                                <span className="text-sm font-bold text-[#121212]">
+                                  ₦{item.amount.toLocaleString()}
+                                </span>
+                                <span className="text-[11px] text-[#4B5563]">
+                                  {formatDateTime(item.date)}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <div className="flex flex-col items-end">
+                                <span className="text-sm font-bold text-[#00BF63]">
+                                  +{item.units.toFixed(1)} kWh
+                                </span>
+                                <span className="text-[10px] text-[#9CA3AF] uppercase font-bold tracking-wider">
+                                  {item.source}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex justify-between items-center border-t border-zinc-100 pt-2.5 mt-0.5">
+                            <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Recharge Management</span>
+                            <div className="flex items-center gap-3">
+                              <button
+                                onClick={() => startEdit(item)}
+                                className="text-zinc-400 hover:text-[#00BF63] flex items-center gap-1 text-[10px] font-bold"
+                                disabled={isSubmitting}
+                              >
+                                <IconEdit className="w-3.5 h-3.5" /> Edit
+                              </button>
+                              <button
+                                onClick={() => handleDelete(item.id)}
+                                className="text-zinc-400 hover:text-red-500 flex items-center gap-1 text-[10px] font-bold"
+                                disabled={isSubmitting}
+                              >
+                                <IconTrash className="w-3.5 h-3.5" /> Delete
+                              </button>
+                            </div>
+                          </div>
                         </div>
-                      </div>
-                      <div className="flex flex-col items-end">
-                        <span className="text-sm font-bold text-[#00BF63]">
-                          +{item.units.toFixed(1)} kWh
-                        </span>
-                        <span className="text-[10px] text-[#9CA3AF] uppercase font-bold tracking-wider">
-                          {item.source}
-                        </span>
-                      </div>
+                      )}
                     </div>
                   ))
                 ) : (

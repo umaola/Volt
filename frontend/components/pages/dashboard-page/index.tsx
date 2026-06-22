@@ -1,5 +1,5 @@
 import * as React from "react"
-import { HeroHeader } from "./hero-header"
+import { HeroHeader, ExpandedHeader } from "./hero-header"
 import { QuickStats } from "./quick-stats"
 import { UsageChart } from "./usage-chart"
 import { ActiveDevices } from "./active-devices"
@@ -28,12 +28,16 @@ interface DashboardPageProps {
   onTogglePower: (state: "on" | "off") => void
   onQuickAction: (action: "calculator" | "outage" | "appliance" | "insights" | "history" | "notification_opened" | "surge-checklist") => void
   onProfileClick: () => void
-  appliances: Array<{ name: string; wattage: number; hours: number }>
+  appliances: Array<{ name: string; wattage?: number; custom_wattage?: number; hours?: number; hours_per_day?: number }>
   deviceActiveStates: Record<string, boolean>
   onToggleDevice: (name: string) => void
   recharges?: any[]
   powerLogs?: any[]
   usageLogs?: any[]
+  weeklyUsage?: any[]
+  monthlyUsage?: any[]
+  estimatedSessionMinutes?: number
+  currentSessionStart?: string
 }
 
 export function DashboardPage({
@@ -55,7 +59,11 @@ export function DashboardPage({
   onToggleDevice,
   recharges = [],
   powerLogs = [],
-  usageLogs = []
+  usageLogs = [],
+  weeklyUsage = [],
+  monthlyUsage = [],
+  estimatedSessionMinutes = 360,
+  currentSessionStart
 }: DashboardPageProps) {
   const [mockDevices, setMockDevices] = React.useState([
     {
@@ -100,21 +108,23 @@ export function DashboardPage({
     )
   }
 
-  const mappedDevices = appliances.length > 0
+  const mappedDevices = (appliances.length > 0
     ? appliances.map((app) => {
         const active = deviceActiveStates[app.name] !== false
-        const dailyKwh = (app.wattage * app.hours) / 1000
+        const wattage = app.wattage ?? app.custom_wattage ?? 0
+        const hours = app.hours ?? app.hours_per_day ?? 0
+        const dailyKwh = (wattage * hours) / 1000
         return {
           name: app.name,
           room: "Appliance",
-          subtitle: `${app.hours}h daily limit`,
+          subtitle: `${hours}h daily limit`,
           value: `${dailyKwh.toFixed(1)} kWh`,
           active,
           progress: active ? 100 : 0,
-          wattage: app.wattage
+          wattage
         }
       })
-    : mockDevices
+    : mockDevices).slice(0, 3)
 
   const handleToggle = (index: number) => {
     if (appliances.length > 0) {
@@ -123,6 +133,12 @@ export function DashboardPage({
       handleToggleMockDevice(index)
     }
   }
+
+  const [isCollapsed, setIsCollapsed] = React.useState(false)
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    setIsCollapsed(e.currentTarget.scrollTop > 20)
+  }
+
 
   if (isLoading) {
     return (
@@ -148,17 +164,28 @@ export function DashboardPage({
   }
 
   return (
-    <div className="flex-grow flex flex-col bg-[#F9FAFB] overflow-y-auto pb-6">
+    <div className="flex-grow flex flex-col bg-[#F9FAFB] relative overflow-hidden h-full w-full">
       <HeroHeader
         userName={userName}
-        remainingUnits={remainingUnits}
-        tariffBand={tariffBand}
-        expectedSupplyHours={expectedSupplyHours}
         onProfileClick={onProfileClick}
+        isCollapsed={isCollapsed}
+        remainingUnits={remainingUnits}
       />
 
+      <div
+        className="flex-grow overflow-y-auto pb-6 scroll-smooth w-full h-full"
+        onScroll={handleScroll}
+      >
+        <ExpandedHeader
+          userName={userName}
+          remainingUnits={remainingUnits}
+          tariffBand={tariffBand}
+          expectedSupplyHours={expectedSupplyHours}
+          onProfileClick={onProfileClick}
+        />
+
       {powerState === "on" && (
-        <div className="mx-5 mt-4 bg-emerald-950 border border-emerald-800 text-white rounded-2xl p-4 shadow-md flex items-center justify-between animate-in fade-in slide-in-from-top-4 duration-300 relative overflow-hidden">
+        <div className="mx-5 mt-4 bg-emerald-950 border border-emerald-800 text-white rounded-2xl p-4 shadow-md flex items-center justify-between animate-in fade-in slide-in-from-top-4 duration-300 relative overflow-hidden z-20">
           <div className="absolute -right-10 -bottom-10 w-24 h-24 rounded-full bg-emerald-500/10 pointer-events-none" />
           <div className="flex items-center gap-3 z-10">
             <div className="w-9 h-9 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
@@ -181,7 +208,7 @@ export function DashboardPage({
       )}
 
       {powerState === "off" && (
-        <div className="mx-5 mt-4 bg-zinc-900 border border-zinc-800 text-white rounded-2xl p-4 shadow-md flex items-center justify-between animate-in fade-in slide-in-from-top-4 duration-300 relative overflow-hidden">
+        <div className="mx-5 mt-4 bg-zinc-900 border border-zinc-800 text-white rounded-2xl p-4 shadow-md flex items-center justify-between animate-in fade-in slide-in-from-top-4 duration-300 relative overflow-hidden z-20">
           <div className="absolute -right-10 -bottom-10 w-24 h-24 rounded-full bg-zinc-800/20 pointer-events-none" />
           <div className="flex items-center gap-3 z-10">
             <div className="w-9 h-9 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center text-zinc-400 shrink-0">
@@ -203,14 +230,21 @@ export function DashboardPage({
         </div>
       )}
 
-      <div className="p-5 flex flex-col gap-6 mt-4 z-20">
+      <div className="px-5 pb-5 flex flex-col gap-6 mt-4 z-20">
+
         {powerState === "on" && (
-          <GridLifespan powerState={powerState} estimatedDurationMinutes={360} onTogglePower={onTogglePower} />
+          <GridLifespan
+            powerState={powerState}
+            estimatedDurationMinutes={estimatedSessionMinutes}
+            onTogglePower={onTogglePower}
+            hasCommunityData={powerLogs && powerLogs.length > 0}
+            currentSessionStart={currentSessionStart}
+          />
         )}
 
         <QuickStats dailyBurnRate={dailyBurnRate} daysRemaining={daysRemaining} />
         
-        <UsageChart />
+        <UsageChart usageLogs={usageLogs} weeklyUsage={weeklyUsage} monthlyUsage={monthlyUsage} />
 
         <ActiveDevices
           devices={mappedDevices}
@@ -226,6 +260,7 @@ export function DashboardPage({
         />
 
         <SavingsTip />
+      </div>
       </div>
     </div>
   )

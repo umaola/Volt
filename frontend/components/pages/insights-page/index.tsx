@@ -234,77 +234,81 @@ export function InsightsPage({
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl p-5 border border-[#F3F4F6] shadow-[0_2px_8px_rgba(0,0,0,0.06)] flex flex-col gap-4">
-          <span className="text-xs font-bold text-[#4B5563] uppercase tracking-wider">
-            Appliance Consumption Breakdown
-          </span>
+        {applianceBreakdown.length > 0 && (
+          <div className="bg-white rounded-2xl p-5 border border-[#F3F4F6] shadow-[0_2px_8px_rgba(0,0,0,0.06)] flex flex-col gap-4">
+            <span className="text-xs font-bold text-[#4B5563] uppercase tracking-wider">
+              Appliance Consumption Breakdown
+            </span>
 
-          <div className="flex flex-col gap-4">
-            {applianceBreakdown.map((app) => (
-              <div key={app.name} className="flex flex-col gap-1">
-                <div className="flex justify-between items-center text-xs font-semibold">
-                  <div className="flex items-center gap-2">
-                    <div className="text-zinc-500">
-                      {getApplianceIcon(app.name)}
+            <div className="flex flex-col gap-4">
+              {applianceBreakdown.map((app) => (
+                <div key={app.name} className="flex flex-col gap-1">
+                  <div className="flex justify-between items-center text-xs font-semibold">
+                    <div className="flex items-center gap-2">
+                      <div className="text-zinc-500">
+                        {getApplianceIcon(app.name)}
+                      </div>
+                      <span className="text-[#121212]">{app.name}</span>
                     </div>
-                    <span className="text-[#121212]">{app.name}</span>
+                    <div className="flex gap-2">
+                      <span className="text-[#4B5563]">{app.kwh.toFixed(1)} kWh/d</span>
+                      <span className="text-[#121212] font-bold">({app.percentage}%)</span>
+                    </div>
                   </div>
-                  <div className="flex gap-2">
-                    <span className="text-[#4B5563]">{app.kwh.toFixed(1)} kWh/d</span>
-                    <span className="text-[#121212] font-bold">({app.percentage}%)</span>
+
+                  <div className="w-full h-2 bg-zinc-100 rounded-full overflow-hidden mt-1.5">
+                    <div
+                      className="h-full bg-primary rounded-full transition-all duration-500"
+                      style={{ width: `${app.percentage}%` }}
+                    />
                   </div>
                 </div>
+              ))}
+            </div>
+          </div>
+        )}
 
-                <div className="w-full h-2 bg-zinc-100 rounded-full overflow-hidden mt-1.5">
+        {insights.length > 0 && (
+          <div className="flex flex-col gap-3 animate-fade-in">
+            <span className="text-xs font-bold text-[#4B5563] uppercase tracking-wider">Dynamic Insights</span>
+            <div className="flex flex-col gap-3">
+              {insights.map((ins, idx) => {
+                const isPositive = ins.type === "positive"
+                const isNegative = ins.type === "negative"
+                return (
                   <div
-                    className="h-full bg-primary rounded-full transition-all duration-500"
-                    style={{ width: `${app.percentage}%` }}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-3">
-          <span className="text-xs font-bold text-[#4B5563] uppercase tracking-wider">Dynamic Insights</span>
-          <div className="flex flex-col gap-3">
-            {insights.map((ins, idx) => {
-              const isPositive = ins.type === "positive"
-              const isNegative = ins.type === "negative"
-              return (
-                <div
-                  key={idx}
-                  className={`flex gap-3 border rounded-2xl p-4 shadow-sm hover:shadow transition-shadow ${
-                    isPositive
-                      ? "bg-emerald-50 border-emerald-100 text-emerald-800"
-                      : isNegative
-                      ? "bg-red-50 border-red-100 text-red-800"
-                      : "bg-white border-zinc-100 text-zinc-800"
-                  }`}
-                >
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
-                    isPositive
-                      ? "bg-white text-emerald-600 border border-emerald-200"
-                      : isNegative
-                      ? "bg-white text-red-600 border border-red-200"
-                      : "bg-zinc-50 text-zinc-600 border border-zinc-200"
-                  }`}>
-                    {getInsightIcon(ins.icon)}
+                    key={idx}
+                    className={`flex gap-3 border rounded-2xl p-4 shadow-sm hover:shadow transition-shadow ${
+                      isPositive
+                        ? "bg-emerald-50 border-emerald-100 text-emerald-800"
+                        : isNegative
+                        ? "bg-red-50 border-red-100 text-red-800"
+                        : "bg-white border-zinc-100 text-zinc-800"
+                    }`}
+                  >
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
+                      isPositive
+                        ? "bg-white text-emerald-600 border border-emerald-200"
+                        : isNegative
+                        ? "bg-white text-red-600 border border-red-200"
+                        : "bg-zinc-50 text-zinc-600 border border-zinc-200"
+                    }`}>
+                      {getInsightIcon(ins.icon)}
+                    </div>
+                    <div className="flex-grow flex flex-col justify-center gap-1">
+                      <p className="text-xs leading-relaxed font-semibold">
+                        {ins.text}
+                      </p>
+                      <span className="text-[10px] font-bold uppercase tracking-wider opacity-90">
+                        Impact: {ins.impact}
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex-grow flex flex-col justify-center gap-1">
-                    <p className="text-xs leading-relaxed font-semibold">
-                      {ins.text}
-                    </p>
-                    <span className="text-[10px] font-bold uppercase tracking-wider opacity-90">
-                      Impact: {ins.impact}
-                    </span>
-                  </div>
-                </div>
-              )
-            })}
+                )
+              })}
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   )

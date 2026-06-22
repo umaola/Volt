@@ -43,7 +43,7 @@ export const createUser = onRequest({ cors: true }, async (request, response) =>
 
 export const saveOnboardingProfile = onRequest({ cors: true }, async (request, response) => {
     try {
-        const { uid, meterNumber, disco, tariffBand, meterType, appliances, currentUnits } = request.body;
+        const { uid, meterNumber, disco, tariffBand, meterType, appliances, currentUnits, powerState } = request.body;
 
         if (!uid || !meterNumber || !disco || !tariffBand || !meterType) {
             response.status(400).send({ error: "Missing required fields" });
@@ -53,12 +53,14 @@ export const saveOnboardingProfile = onRequest({ cors: true }, async (request, r
         const batch = db.batch();
 
         const profileRef = db.collection("electricity_profiles").doc(uid);
+        const nowStr = new Date().toISOString();
         batch.set(profileRef, {
             user_id: uid,
             disco,
             tariff_band: tariffBand,
             meter_type: meterType,
-            updated_at: new Date().toISOString()
+            created_at: nowStr,
+            updated_at: nowStr
         });
 
         const meterRef = db.collection("meters").doc(meterNumber);
@@ -69,6 +71,20 @@ export const saveOnboardingProfile = onRequest({ cors: true }, async (request, r
             current_units: Number(currentUnits) || 0,
             updated_at: new Date().toISOString()
         });
+
+        if (powerState === "on") {
+            const now = new Date().toISOString();
+            const logRef = db.collection("power_supply_logs").doc();
+            batch.set(logRef, {
+                id: logRef.id,
+                user_id: uid,
+                power_on: now,
+                power_off: null,
+                duration_hours: 0,
+                source: "manual",
+                created_at: now
+            });
+        }
 
         if (Array.isArray(appliances)) {
             for (const app of appliances) {
@@ -272,6 +288,7 @@ export const getDashboardData = onRequest({ cors: true }, async (request, respon
             response.status(400).send({ error: "Missing uid" });
             return;
         }
+        let createdAtStr = new Date().toISOString();
         const userDoc = await db.collection("users").doc(uid).get();
         let userName = "Amarachi Okafor";
         let phone = "";
@@ -281,6 +298,7 @@ export const getDashboardData = onRequest({ cors: true }, async (request, respon
             userName = userData?.name || "Amarachi Okafor";
             phone = userData?.phone || "";
             email = userData?.email || "";
+            createdAtStr = userData?.created_at || new Date().toISOString();
         } else {
             try {
                 const { getAuth } = await import("firebase-admin/auth");
@@ -372,8 +390,10 @@ export const getDashboardData = onRequest({ cors: true }, async (request, respon
             }
         }
         const powerSupplyHours = Number((totalSeconds / 3600).toFixed(1));
-        const hasActive = logs.some(log => log.power_off === null);
+        const activeLog = logs.find(log => log.power_off === null);
+        const hasActive = !!activeLog;
         const powerState = hasActive ? "on" : "off";
+        const currentSessionStart = activeLog ? activeLog.power_on : null;
         const rechargesQuery = await db.collection("recharges")
             .where("user_id", "==", uid)
             .get();
@@ -446,8 +466,92 @@ export const getDashboardData = onRequest({ cors: true }, async (request, respon
                 hours: hoursPerDay
             });
         });
-        const dailyBurnRate = calculatedBurnRate > 0 ? calculatedBurnRate : 4.3;
-        const daysRemaining = Math.max(0, Math.ceil(currentUnits / dailyBurnRate));
+        let totalSessionSecs = 0;
+        let completedSessionCount = 0;
+        supplyLogsQuery.docs.forEach(doc => {
+            const logData = doc.data();
+            if (logData.power_on && logData.power_off) {
+                const dur = new Date(logData.power_off).getTime() - new Date(logData.power_on).getTime();
+                if (dur > 0) {
+                    totalSessionSecs += dur / 1000;
+                    completedSessionCount++;
+                }
+            }
+        });
+        let estimatedSessionMinutes = 360;
+        if (completedSessionCount > 0) {
+            estimatedSessionMinutes = Math.round((totalSessionSecs / completedSessionCount) / 60);
+        } else {
+            const bandMap: Record<string, number> = {
+                "Band A": 600,
+                "Band B": 480,
+                "Band C": 360,
+                "Band D": 240,
+                "Band E": 120
+            };
+            estimatedSessionMinutes = bandMap[tariffBand] ?? 360;
+        }
+
+
+
+        const daysUsingApp = (Date.now() - new Date(createdAtStr).getTime()) / (24 * 60 * 60 * 1000);
+        let dailyBurnRate = 0;
+        if (daysUsingApp >= 1) {
+            const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+            const cutoffLogsQuery = await db.collection("power_supply_logs")
+                .where("user_id", "==", uid)
+                .where("power_on", ">=", sevenDaysAgo.toISOString())
+                .get();
+            const supplyLogsList = cutoffLogsQuery.docs.map(doc => doc.data());
+
+            const dailySupplyHours = new Array(7).fill(0);
+            const nowTime = Date.now();
+            for (let i = 0; i < 7; i++) {
+                const dayStart = new Date();
+                dayStart.setHours(0, 0, 0, 0);
+                dayStart.setDate(dayStart.getDate() - i);
+                const dayStartMs = dayStart.getTime();
+                const dayEndMs = dayStartMs + 24 * 60 * 60 * 1000;
+
+                let totalSecs = 0;
+                for (const log of supplyLogsList) {
+                    const logOn = new Date(log.power_on).getTime();
+                    const logOff = log.power_off ? new Date(log.power_off).getTime() : nowTime;
+                    
+                    const overlapStart = Math.max(logOn, dayStartMs);
+                    const overlapEnd = Math.min(logOff, dayEndMs);
+                    if (overlapEnd > overlapStart) {
+                        totalSecs += (overlapEnd - overlapStart) / 1000;
+                    }
+                }
+                dailySupplyHours[i] = totalSecs / 3600;
+            }
+
+            let totalDailyBurn = 0;
+            let activeDaysCount = 0;
+            for (let i = 0; i < 7; i++) {
+                const dayLimit = new Date();
+                dayLimit.setDate(dayLimit.getDate() - i);
+                if (dayLimit.getTime() < new Date(createdAtStr).getTime()) {
+                    continue;
+                }
+                const H = dailySupplyHours[i];
+                let dayUsage = 0;
+                for (const app of appliancesList) {
+                    dayUsage += (app.wattage * Math.min(H, app.hours)) / 1000;
+                }
+                if (dayUsage === 0 && H > 0 && appliancesList.length === 0) {
+                    dayUsage = 4.3 * (H / 12);
+                }
+                totalDailyBurn += dayUsage;
+                activeDaysCount++;
+            }
+            dailyBurnRate = activeDaysCount > 0 ? (totalDailyBurn / activeDaysCount) : 0;
+            if (dailyBurnRate === 0 && appliancesList.length > 0) {
+                dailyBurnRate = calculatedBurnRate;
+            }
+        }
+        const daysRemaining = dailyBurnRate > 0 ? Math.max(0, Math.ceil(currentUnits / dailyBurnRate)) : 0;
         const expectedHoursMap: Record<string, number> = {
             "Band A": 20,
             "Band B": 16,
@@ -499,7 +603,9 @@ export const getDashboardData = onRequest({ cors: true }, async (request, respon
             expectedSupplyHours,
             tariffBand,
             notificationPreferences,
-            subscription
+            subscription,
+            estimatedSessionMinutes,
+            currentSessionStart
         });
     } catch (error) {
         logger.error("Error fetching dashboard data:", error);
@@ -877,18 +983,27 @@ export const getHistoryData = onRequest({ cors: true }, async (request, response
             .where("user_id", "==", uid)
             .where("is_active", "==", true)
             .get();
-        let dailyBurn = 0;
+        const appliancesList: any[] = [];
         appliancesQuery.docs.forEach(doc => {
             const app = doc.data();
-            dailyBurn += ((app.custom_wattage || 0) * (app.hours_per_day || 0)) / 1000;
+            const wattage = app.custom_wattage || 0;
+            const hours = app.hours_per_day || 0;
+            const kwh = (wattage * hours) / 1000;
+            appliancesList.push({
+                name: app.name,
+                wattage,
+                hours,
+                kwh
+            });
         });
-        if (dailyBurn === 0) dailyBurn = 4.3;
 
         const profileDoc = await db.collection("electricity_profiles").doc(uid).get();
+        let onboardingDate = new Date(0);
         let rateData: any = null;
         let tariffRate = 209.50;
         if (profileDoc.exists) {
             const profileData = profileDoc.data();
+            onboardingDate = new Date(profileData?.created_at || profileData?.updated_at || 0);
             const tariffBand = profileData?.tariff_band || "Band A";
             const disco = profileData?.disco || "EKEDC";
             try {
@@ -923,14 +1038,56 @@ export const getHistoryData = onRequest({ cors: true }, async (request, response
             }
         }
 
+        const onboardingDay = new Date(onboardingDate);
+        onboardingDay.setHours(0, 0, 0, 0);
+
+        const nowTime = Date.now();
+        const dailySupplyHours = new Array(7).fill(0);
+        for (let i = 6; i >= 0; i--) {
+            const dayStart = new Date();
+            dayStart.setHours(0, 0, 0, 0);
+            dayStart.setDate(dayStart.getDate() - i);
+            const dayStartMs = dayStart.getTime();
+            const dayEndMs = dayStartMs + 24 * 60 * 60 * 1000;
+
+            let totalSecs = 0;
+            for (const log of powerLogs) {
+                const logOn = new Date(log.powerOn).getTime();
+                const logOff = log.powerOff ? new Date(log.powerOff).getTime() : nowTime;
+                
+                const overlapStart = Math.max(logOn, dayStartMs);
+                const overlapEnd = Math.min(logOff, dayEndMs);
+                if (overlapEnd > overlapStart) {
+                    totalSecs += (overlapEnd - overlapStart) / 1000;
+                }
+            }
+            dailySupplyHours[6 - i] = totalSecs / 3600;
+        }
+
         const usageLogs: any[] = [];
         for (let i = 0; i < 7; i++) {
             const d = new Date();
             d.setDate(d.getDate() - i);
+            const candidateDay = new Date(d);
+            candidateDay.setHours(0, 0, 0, 0);
+
+            if (candidateDay.getTime() < onboardingDay.getTime()) {
+                continue;
+            }
+
             const dateStr = d.toISOString();
             const dailyRate = rateData ? getRateForDate(rateData, dateStr) : tariffRate;
-            const variance = 0.85 + Math.random() * 0.3;
-            const unitsUsed = Number((dailyBurn * variance).toFixed(2));
+            
+            const H = dailySupplyHours[6 - i];
+            let kwh = 0;
+            for (const app of appliancesList) {
+                kwh += (app.wattage * Math.min(H, app.hours)) / 1000;
+            }
+            if (kwh === 0 && H > 0 && appliancesList.length === 0) {
+                kwh = 4.3 * (H / 12);
+            }
+
+            const unitsUsed = Number(kwh.toFixed(2));
             const cost = Number((unitsUsed * dailyRate).toFixed(2));
             usageLogs.push({
                 date: d.toISOString().split("T")[0],
@@ -959,10 +1116,12 @@ export const getInsightsData = onRequest({ cors: true }, async (request, respons
         }
 
         const profileDoc = await db.collection("electricity_profiles").doc(uid).get();
+        let onboardingDate = new Date(0);
         let rateData: any = null;
         let tariffRate = 209.50;
         if (profileDoc.exists) {
             const profileData = profileDoc.data();
+            onboardingDate = new Date(profileData?.created_at || profileData?.updated_at || 0);
             const tariffBand = profileData?.tariff_band || "Band A";
             const disco = profileData?.disco || "EKEDC";
             try {
@@ -1018,34 +1177,133 @@ export const getInsightsData = onRequest({ cors: true }, async (request, respons
             });
         });
 
-        if (dailyBurn === 0) {
-            dailyBurn = 4.3;
-        }
+        const onboardingDay = new Date(onboardingDate);
+        onboardingDay.setHours(0, 0, 0, 0);
 
         const dailyUsage: any[] = [];
         const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+        const nowTime = Date.now();
+        
+        const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        const supplyLogsQuery = await db.collection("power_supply_logs")
+            .where("user_id", "==", uid)
+            .where("power_on", ">=", thirtyDaysAgo.toISOString())
+            .get();
+        const supplyLogs = supplyLogsQuery.docs.map(doc => doc.data());
+
+        const dailySupplyHours = new Array(14).fill(0);
+        for (let i = 13; i >= 0; i--) {
+            const dayStart = new Date();
+            dayStart.setHours(0, 0, 0, 0);
+            dayStart.setDate(dayStart.getDate() - i);
+            const dayStartMs = dayStart.getTime();
+            const dayEndMs = dayStartMs + 24 * 60 * 60 * 1000;
+
+            let totalSecs = 0;
+            for (const log of supplyLogs) {
+                const logOn = new Date(log.power_on).getTime();
+                const logOff = log.power_off ? new Date(log.power_off).getTime() : nowTime;
+                
+                const overlapStart = Math.max(logOn, dayStartMs);
+                const overlapEnd = Math.min(logOff, dayEndMs);
+                if (overlapEnd > overlapStart) {
+                    totalSecs += (overlapEnd - overlapStart) / 1000;
+                }
+            }
+            dailySupplyHours[13 - i] = totalSecs / 3600;
+        }
+
+        const dailyUsage14: number[] = [];
+        for (let i = 13; i >= 0; i--) {
+            const d = new Date();
+            d.setDate(d.getDate() - i);
+            const candidateDay = new Date(d);
+            candidateDay.setHours(0, 0, 0, 0);
+
+            if (candidateDay.getTime() < onboardingDay.getTime()) {
+                dailyUsage14.push(0);
+                continue;
+            }
+
+            const H = dailySupplyHours[13 - i];
+            let kwh = 0;
+            for (const app of appliancesList) {
+                kwh += (app.wattage * Math.min(H, app.hours)) / 1000;
+            }
+            if (kwh === 0 && H > 0 && appliancesList.length === 0) {
+                kwh = 4.3 * (H / 12);
+            }
+            dailyUsage14.push(Number(kwh.toFixed(2)));
+        }
+
+        let dynamicDailyBurn = 0;
+        let activeDaysCount = 0;
         for (let i = 6; i >= 0; i--) {
             const d = new Date();
             d.setDate(d.getDate() - i);
+            const candidateDay = new Date(d);
+            candidateDay.setHours(0, 0, 0, 0);
+
+            if (candidateDay.getTime() < onboardingDay.getTime()) {
+                continue;
+            }
+
             const dayName = days[d.getDay()];
             const dailyRate = rateData ? getRateForDate(rateData, d.toISOString()) : tariffRate;
-            const variance = 0.85 + Math.random() * 0.3;
-            const kwh = Number((dailyBurn * variance).toFixed(2));
+            const kwh = dailyUsage14[13 - i];
             const cost = Number((kwh * dailyRate).toFixed(2));
             dailyUsage.push({
                 label: dayName,
                 kwh,
                 cost
             });
+            dynamicDailyBurn += kwh;
+            activeDaysCount++;
         }
 
+        const calculatedBurnRate = activeDaysCount > 0 ? (dynamicDailyBurn / activeDaysCount) : 0;
+        const finalDailyBurn = calculatedBurnRate > 0 ? calculatedBurnRate : (dailyBurn > 0 ? dailyBurn : 4.3);        
         const weeklyUsage: any[] = [];
         for (let i = 3; i >= 0; i--) {
             const d = new Date();
             d.setDate(d.getDate() - (i * 7));
+            const candidateDay = new Date(d);
+            candidateDay.setHours(0, 0, 0, 0);
+
+            if (candidateDay.getTime() < onboardingDay.getTime()) {
+                continue;
+            }
+
             const weeklyRate = rateData ? getRateForDate(rateData, d.toISOString()) : tariffRate;
-            const variance = 0.9 + Math.random() * 0.2;
-            const kwh = Number((dailyBurn * 7 * variance).toFixed(2));
+            
+            const weekStart = new Date(d);
+            weekStart.setHours(0, 0, 0, 0);
+            weekStart.setDate(weekStart.getDate() - 6);
+            const weekStartMs = weekStart.getTime();
+            const weekEndMs = candidateDay.getTime() + 24 * 60 * 60 * 1000;
+
+            let totalSecs = 0;
+            for (const log of supplyLogs) {
+                const logOn = new Date(log.power_on).getTime();
+                const logOff = log.power_off ? new Date(log.power_off).getTime() : nowTime;
+                
+                const overlapStart = Math.max(logOn, weekStartMs);
+                const overlapEnd = Math.min(logOff, weekEndMs);
+                if (overlapEnd > overlapStart) {
+                    totalSecs += (overlapEnd - overlapStart) / 1000;
+                }
+            }
+            const H = totalSecs / 3600;
+
+            let kwh = 0;
+            for (const app of appliancesList) {
+                kwh += (app.wattage * Math.min(H, app.hours * 7)) / 1000;
+            }
+            if (kwh === 0 && H > 0 && appliancesList.length === 0) {
+                kwh = 4.3 * 7 * (H / (12 * 7));
+            }
+
+            kwh = Number(kwh.toFixed(2));
             const cost = Number((kwh * weeklyRate).toFixed(2));
             weeklyUsage.push({
                 label: `Week ${4 - i}`,
@@ -1059,13 +1317,53 @@ export const getInsightsData = onRequest({ cors: true }, async (request, respons
         for (let i = 5; i >= 0; i--) {
             const d = new Date();
             d.setMonth(d.getMonth() - i);
-            const monthName = months[d.getMonth()];
+            const candidateDay = new Date(d);
+            candidateDay.setHours(0, 0, 0, 0);
+            candidateDay.setDate(1);
+
+            const candidateYear = candidateDay.getFullYear();
+            const candidateMonth = candidateDay.getMonth();
+            const onboardingYear = onboardingDay.getFullYear();
+            const onboardingMonth = onboardingDay.getMonth();
+
+            if (candidateYear < onboardingYear || (candidateYear === onboardingYear && candidateMonth < onboardingMonth)) {
+                continue;
+            }
+
             const monthlyRate = rateData ? getRateForDate(rateData, d.toISOString()) : tariffRate;
-            const variance = 0.92 + Math.random() * 0.16;
-            const kwh = Number((dailyBurn * 30 * variance).toFixed(2));
+            
+            const monthStart = new Date(candidateYear, candidateMonth, 1, 0, 0, 0, 0);
+            const monthEnd = new Date(candidateYear, candidateMonth + 1, 1, 0, 0, 0, 0);
+            const monthStartMs = monthStart.getTime();
+            const monthEndMs = monthEnd.getTime();
+            
+            const daysInMonth = new Date(candidateYear, candidateMonth + 1, 0).getDate();
+
+            let totalSecs = 0;
+            for (const log of supplyLogs) {
+                const logOn = new Date(log.power_on).getTime();
+                const logOff = log.power_off ? new Date(log.power_off).getTime() : nowTime;
+                
+                const overlapStart = Math.max(logOn, monthStartMs);
+                const overlapEnd = Math.min(logOff, monthEndMs);
+                if (overlapEnd > overlapStart) {
+                    totalSecs += (overlapEnd - overlapStart) / 1000;
+                }
+            }
+            const H = totalSecs / 3600;
+
+            let kwh = 0;
+            for (const app of appliancesList) {
+                kwh += (app.wattage * Math.min(H, app.hours * daysInMonth)) / 1000;
+            }
+            if (kwh === 0 && H > 0 && appliancesList.length === 0) {
+                kwh = 4.3 * daysInMonth * (H / (12 * daysInMonth));
+            }
+
+            kwh = Number(kwh.toFixed(2));
             const cost = Number((kwh * monthlyRate).toFixed(2));
             monthlyUsage.push({
-                label: monthName,
+                label: months[candidateMonth],
                 kwh,
                 cost
             });
@@ -1073,7 +1371,7 @@ export const getInsightsData = onRequest({ cors: true }, async (request, respons
 
         const sortedApps = [...appliancesList].sort((a, b) => b.kwh - a.kwh);
         const applianceBreakdown = sortedApps.map(app => {
-            const pct = dailyBurn > 0 ? (app.kwh / dailyBurn) * 100 : 0;
+            const pct = finalDailyBurn > 0 ? (app.kwh / finalDailyBurn) * 100 : 0;
             return {
                 name: app.name,
                 percentage: Number(pct.toFixed(0)),
@@ -1082,42 +1380,70 @@ export const getInsightsData = onRequest({ cors: true }, async (request, respons
             };
         });
 
-        if (applianceBreakdown.length === 0) {
-            applianceBreakdown.push(
-                { name: "Refrigerator", percentage: 58, kwh: 2.5, cost: Number((2.5 * tariffRate).toFixed(2)) },
-                { name: "Fan", percentage: 23, kwh: 1.0, cost: Number((1.0 * tariffRate).toFixed(2)) },
-                { name: "TV & Electronics", percentage: 19, kwh: 0.8, cost: Number((0.8 * tariffRate).toFixed(2)) }
-            );
+        const insights: any[] = [];
+        const daysSinceOnboarding = Math.floor((nowTime - onboardingDay.getTime()) / (24 * 60 * 60 * 1000));
+        const kwhThisWeek = dailyUsage14.slice(7, 14).reduce((a, b) => a + b, 0);
+        const kwhPrevWeek = dailyUsage14.slice(0, 7).reduce((a, b) => a + b, 0);
+
+        if (daysSinceOnboarding >= 14 && kwhPrevWeek > 0) {
+            const diff = kwhThisWeek - kwhPrevWeek;
+            const pctChange = Math.round((Math.abs(diff) / kwhPrevWeek) * 100);
+            if (pctChange > 0) {
+                const moreOrLess = diff > 0 ? "more" : "less";
+                insights.push({
+                    text: `You used ${pctChange}% ${moreOrLess} electricity this week compared to last week.`,
+                    type: moreOrLess === "less" ? "positive" : "negative",
+                    icon: moreOrLess === "less" ? "trending-down" : "trending-up",
+                    impact: `${moreOrLess === "less" ? "Saved" : "Added"} ~${Math.abs(diff).toFixed(1)} kWh`
+                });
+            }
         }
 
-        const insights: any[] = [];
-        const weeklyPctChange = Math.floor(10 + Math.random() * 15);
-        const moreOrLess = Math.random() > 0.4 ? "more" : "less";
+        if (appliancesList.length > 0 && sortedApps.length > 0) {
+            const topApp = sortedApps[0];
+            const savedKwh = (topApp.wattage * 1 * 30) / 1000;
+            const savedCost = Math.round(savedKwh * tariffRate);
+            insights.push({
+                text: `Reducing your ${topApp.name} runtime by just 1 hour daily will save you approximately ₦${savedCost.toLocaleString()} monthly.`,
+                type: "positive",
+                icon: "bulb",
+                impact: `Saves ₦${savedCost.toLocaleString()}/mo`
+            });
+        }
 
-        insights.push({
-            text: `You used ${weeklyPctChange}% ${moreOrLess} electricity this week compared to last week.`,
-            type: moreOrLess === "less" ? "positive" : "negative",
-            icon: moreOrLess === "less" ? "trending-down" : "trending-up",
-            impact: `${moreOrLess === "less" ? "Saved" : "Added"} ~${(dailyBurn * weeklyPctChange * 0.07).toFixed(1)} kWh`
-        });
+        if (finalDailyBurn > 0) {
+            const unitsFor10k = 10000 / tariffRate;
+            const daysFor10k = Math.round(unitsFor10k / finalDailyBurn);
+            if (daysFor10k > 0) {
+                insights.push({
+                    text: `Your current burn rate (${finalDailyBurn.toFixed(1)} kWh/d) means a ₦10,000 recharge lasts ~${daysFor10k} days.`,
+                    type: "neutral",
+                    icon: "leaf",
+                    impact: `Target: ${daysFor10k}d`
+                });
+            }
+        }
 
-        const topApp = applianceBreakdown[0];
-        const acSavings = Math.floor(topApp.cost * 30 * 0.2);
-        insights.push({
-            text: `Reducing your ${topApp.name} runtime by just 1 hour daily will save you approximately ₦${acSavings.toLocaleString()} monthly.`,
-            type: "positive",
-            icon: "bulb",
-            impact: `Saves ₦${acSavings.toLocaleString()}/mo`
-        });
+        const daysWithData = dailyUsage.filter(d => d.kwh > 0).length;
+        if (dailyUsage.length >= 7 && daysWithData >= 6) {
+            let normalUsage = 0;
+            let todayUsage = dailyUsage[dailyUsage.length - 1]?.kwh || 0;
+            let sumPrev = 0;
+            for (let i = 0; i < dailyUsage.length - 1; i++) {
+                sumPrev += dailyUsage[i]?.kwh || 0;
+            }
+            normalUsage = sumPrev / (dailyUsage.length - 1);
 
-        const thresholdUnits = 15;
-        const lowUnitAlertDay = Math.ceil(thresholdUnits / dailyBurn);
-        insights.push({
-            text: `Your current burn rate (${dailyBurn.toFixed(1)} kWh/d) means a ₦10,000 recharge lasts ~${lowUnitAlertDay} days.`,
-            type: "neutral",
-            icon: "leaf",
-            impact: `Target: ${lowUnitAlertDay}d`
-        });
+            if (normalUsage > 0 && todayUsage > 1.3 * normalUsage) {
+                const pctIncrease = Math.round(((todayUsage - normalUsage) / normalUsage) * 100);
+                insights.push({
+                    text: `Your usage today is very high (${pctIncrease}% above your normal daily average).`,
+                    type: "negative",
+                    icon: "trending-up",
+                    impact: `Alert: +${(todayUsage - normalUsage).toFixed(1)} kWh`
+                });
+            }
+        }
 
         response.status(200).send({
             dailyUsage,
@@ -1953,3 +2279,116 @@ export const exportOutageHistory = onRequest({ cors: true }, async (request, res
         response.status(500).send({ error: "Internal server error" });
     }
 });
+
+export const updateRecharge = onRequest({ cors: true }, async (request, response) => {
+    try {
+        const { uid, rechargeId, amount, units } = request.body;
+
+        if (!uid || !rechargeId || amount === undefined || units === undefined) {
+            response.status(400).send({ error: "Missing required fields" });
+            return;
+        }
+
+        const rechargeRef = db.collection("recharges").doc(rechargeId);
+        const rechargeDoc = await rechargeRef.get();
+        if (!rechargeDoc.exists) {
+            response.status(404).send({ error: "Recharge log not found" });
+            return;
+        }
+
+        const rechargeData = rechargeDoc.data();
+        if (!rechargeData || rechargeData.user_id !== uid) {
+            response.status(403).send({ error: "Permission denied" });
+            return;
+        }
+
+        const oldUnits = rechargeData.units_received || 0;
+        const diffUnits = Number(units) - oldUnits;
+
+        const metersQuery = await db.collection("meters").where("user_id", "==", uid).limit(1).get();
+        if (metersQuery.empty) {
+            response.status(404).send({ error: "No meter found for this user" });
+            return;
+        }
+
+        const meterDoc = metersQuery.docs[0];
+        const meterData = meterDoc.data();
+        const currentUnits = meterData.current_units ?? 0;
+        const newMeterUnits = currentUnits + diffUnits;
+
+        const batch = db.batch();
+
+        batch.update(rechargeRef, {
+            amount_paid: Number(amount),
+            units_received: Number(units),
+            tariff_rate: Number(amount) / Number(units),
+            updated_at: new Date().toISOString()
+        });
+
+        batch.update(meterDoc.ref, {
+            current_units: Number(newMeterUnits.toFixed(2)),
+            updated_at: new Date().toISOString()
+        });
+
+        await batch.commit();
+
+        response.status(200).send({ success: true, newUnits: Number(newMeterUnits.toFixed(2)) });
+    } catch (error) {
+        logger.error("Error updating recharge:", error);
+        response.status(500).send({ error: "Internal server error" });
+    }
+});
+
+export const deleteRecharge = onRequest({ cors: true }, async (request, response) => {
+    try {
+        const { uid, rechargeId } = request.body;
+
+        if (!uid || !rechargeId) {
+            response.status(400).send({ error: "Missing required fields" });
+            return;
+        }
+
+        const rechargeRef = db.collection("recharges").doc(rechargeId);
+        const rechargeDoc = await rechargeRef.get();
+        if (!rechargeDoc.exists) {
+            response.status(404).send({ error: "Recharge log not found" });
+            return;
+        }
+
+        const rechargeData = rechargeDoc.data();
+        if (!rechargeData || rechargeData.user_id !== uid) {
+            response.status(403).send({ error: "Permission denied" });
+            return;
+        }
+
+        const units = rechargeData.units_received || 0;
+
+        const metersQuery = await db.collection("meters").where("user_id", "==", uid).limit(1).get();
+        if (metersQuery.empty) {
+            response.status(404).send({ error: "No meter found for this user" });
+            return;
+        }
+
+        const meterDoc = metersQuery.docs[0];
+        const meterData = meterDoc.data();
+        const currentUnits = meterData.current_units ?? 0;
+        const newMeterUnits = Math.max(0, currentUnits - units);
+
+        const batch = db.batch();
+
+        batch.delete(rechargeRef);
+
+        batch.update(meterDoc.ref, {
+            current_units: Number(newMeterUnits.toFixed(2)),
+            updated_at: new Date().toISOString()
+        });
+
+        await batch.commit();
+
+        response.status(200).send({ success: true, newUnits: Number(newMeterUnits.toFixed(2)) });
+    } catch (error) {
+        logger.error("Error deleting recharge:", error);
+        response.status(500).send({ error: "Internal server error" });
+    }
+});
+
