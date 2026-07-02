@@ -531,6 +531,7 @@ function PageContent() {
   }, [user, authResolved])
 
   React.useEffect(() => {
+    if (!authResolved) return
     if (pageParam === "subscription-callback") {
       const reference = searchParams.get("reference")
       const plan = searchParams.get("plan") || "monthly"
@@ -583,7 +584,7 @@ function PageContent() {
           setIsLoading(false)
         })
     }
-  }, [pageParam, searchParams, user])
+  }, [pageParam, searchParams, user, authResolved])
 
   React.useEffect(() => {
     if (pageParam === "dashboard" && dashboardData && user?.meterNumber) {
