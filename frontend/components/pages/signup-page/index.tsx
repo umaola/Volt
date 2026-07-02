@@ -24,6 +24,8 @@ interface SignupPageProps {
     hasNumber: boolean
     hasSpecial: boolean
   }>
+  onNavigateToTerms?: () => void
+  onNavigateToPrivacy?: () => void
 }
 
 export function SignupPage({
@@ -32,7 +34,9 @@ export function SignupPage({
   onSignup,
   onNavigateToLogin,
   onValidatePassword,
-  onBack
+  onBack,
+  onNavigateToTerms,
+  onNavigateToPrivacy
 }: SignupPageProps) {
   const [name, setName] = React.useState("")
   const [email, setEmail] = React.useState("")
@@ -401,6 +405,7 @@ export function SignupPage({
                   href="/?page=terms"
                   onClick={(e) => {
                     e.preventDefault()
+                    onNavigateToTerms?.()
                   }}
                   className="underline font-semibold hover:text-[#121212] transition-colors"
                 >
@@ -411,6 +416,7 @@ export function SignupPage({
                   href="/?page=privacy"
                   onClick={(e) => {
                     e.preventDefault()
+                    onNavigateToPrivacy?.()
                   }}
                   className="underline font-semibold hover:text-[#121212] transition-colors"
                 >

@@ -17,7 +17,11 @@ import {
   reportOutage,
   reportPowerBack,
   getOutageMap,
-  exportOutageHistory
+  exportOutageHistory,
+  verifyAndStartTrial,
+  cancelSubscription,
+  paystackWebhook,
+  calibrateMeterUnits
 } from "../index";
 
 const db = getFirestore();
@@ -762,6 +766,193 @@ describe("Backend Functions Tests", () => {
       expect(data.totalSupplyHours).toBe(5.0);
       expect(data.totalDowntimeHours).toBeCloseTo(7 * 24 - 5.0, 1);
       expect(data.events.length).toBe(1);
+    });
+  });
+
+  describe("Subscription and Paystack Integration", () => {
+    it("should initialize trial payment session", async () => {
+      await db.collection("users").doc("test-sub-1").set({
+        uid: "test-sub-1",
+        email: "sub1@test.com"
+      });
+
+      const req = mockRequest({
+        uid: "test-sub-1",
+        plan: "monthly",
+        initOnly: true
+      });
+      const res = mockResponse();
+
+      await verifyAndStartTrial(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const data = res.send.mock.calls[0][0];
+      expect(data.success).toBe(true);
+      expect(data.authorization_url).toContain("subscription-callback");
+      expect(data.reference).toBeDefined();
+    });
+
+    it("should verify payment and start trial subscription", async () => {
+      await db.collection("users").doc("test-sub-1").set({
+        uid: "test-sub-1",
+        email: "sub1@test.com"
+      });
+
+      const req = mockRequest({
+        uid: "test-sub-1",
+        plan: "monthly",
+        reference: "mock_ref_test123"
+      });
+      const res = mockResponse();
+
+      await verifyAndStartTrial(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const subDoc = await db.collection("subscriptions").doc("test-sub-1").get();
+      expect(subDoc.exists).toBe(true);
+      expect(subDoc.data()?.status).toBe("trialing");
+      expect(subDoc.data()?.plan_type).toBe("monthly");
+
+      const userDoc = await db.collection("users").doc("test-sub-1").get();
+      expect(userDoc.data()?.plan).toBe("Monthly");
+      expect(userDoc.data()?.subscription?.status).toBe("trialing");
+    });
+
+    it("should cancel subscription", async () => {
+      await db.collection("subscriptions").doc("test-sub-1").set({
+        user_id: "test-sub-1",
+        status: "trialing",
+        provider_subscription_id: "SUB_mock_123",
+        provider_email_token: "tok_mock_123",
+        end_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+      });
+
+      await db.collection("users").doc("test-sub-1").set({
+        uid: "test-sub-1",
+        plan: "Monthly",
+        subscription: {
+          status: "trialing"
+        }
+      });
+
+      const req = mockRequest({ uid: "test-sub-1" });
+      const res = mockResponse();
+
+      await cancelSubscription(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const subDoc = await db.collection("subscriptions").doc("test-sub-1").get();
+      expect(subDoc.data()?.status).toBe("cancelled");
+
+      const userDoc = await db.collection("users").doc("test-sub-1").get();
+      expect(userDoc.data()?.subscription?.status).toBe("cancelled");
+    });
+
+    it("should process charge.success webhook renewal", async () => {
+      await db.collection("subscriptions").doc("test-sub-2").set({
+        id: "sub-id-2",
+        user_id: "test-sub-2",
+        status: "trialing",
+        plan_type: "monthly",
+        provider_subscription_id: "SUB_renew_123"
+      });
+
+      await db.collection("users").doc("test-sub-2").set({
+        uid: "test-sub-2",
+        email: "renew@test.com",
+        plan: "Monthly",
+        subscription: {
+          status: "trialing"
+        }
+      });
+
+      const req = mockRequest({
+        event: "charge.success",
+        data: {
+          amount: 50000,
+          currency: "NGN",
+          reference: "webhook_ref_xyz",
+          subscription: {
+            subscription_code: "SUB_renew_123"
+          }
+        }
+      });
+      const res = mockResponse();
+
+      await paystackWebhook(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const subDoc = await db.collection("subscriptions").doc("test-sub-2").get();
+      expect(subDoc.data()?.status).toBe("active");
+
+      const userDoc = await db.collection("users").doc("test-sub-2").get();
+      expect(userDoc.data()?.subscription?.status).toBe("active");
+    });
+  });
+
+  describe("Meter Units Calibration", () => {
+    it("should perform daily calibration with yesterday's light hours", async () => {
+      const uid = "test-calibrate-1";
+      await db.collection("meters").doc("meter-1").set({
+        user_id: uid,
+        current_units: 50.0,
+        meter_number: "M1"
+      });
+
+      await db.collection("user_appliances").doc(`${uid}_AC`).set({
+        user_id: uid,
+        name: "AC",
+        custom_wattage: 1000,
+        hours_per_day: 5,
+        is_active: true
+      });
+
+      const req = mockRequest({
+        uid,
+        type: "daily",
+        lightYesterday: true,
+        hours: 10
+      });
+      const res = mockResponse();
+
+      await calibrateMeterUnits(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.send).toHaveBeenCalled();
+      const resBody = res.send.mock.calls[0][0] as any;
+      expect(resBody.success).toBe(true);
+      expect(resBody.newUnits).toBeLessThan(50.0);
+
+      const profileDoc = await db.collection("electricity_profiles").doc(uid).get();
+      expect(profileDoc.data()?.last_calibration_date).toBeDefined();
+
+      const calLogs = await db.collection("calibration_logs").where("user_id", "==", uid).get();
+      expect(calLogs.empty).toBe(false);
+    });
+
+    it("should perform manual units calibration override", async () => {
+      const uid = "test-calibrate-2";
+      await db.collection("meters").doc("meter-2").set({
+        user_id: uid,
+        current_units: 30.0,
+        meter_number: "M2"
+      });
+
+      const req = mockRequest({
+        uid,
+        type: "manual",
+        manualUnits: 15.5
+      });
+      const res = mockResponse();
+
+      await calibrateMeterUnits(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const resBody = res.send.mock.calls[0][0] as any;
+      expect(resBody.newUnits).toBe(15.5);
+
+      const meterDoc = await db.collection("meters").doc("meter-2").get();
+      expect(meterDoc.data()?.current_units).toBe(15.5);
     });
   });
 });

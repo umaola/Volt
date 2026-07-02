@@ -38,6 +38,7 @@ interface DashboardPageProps {
   monthlyUsage?: any[]
   estimatedSessionMinutes?: number
   currentSessionStart?: string
+  onCalibrateManual?: () => void
 }
 
 export function DashboardPage({
@@ -63,7 +64,8 @@ export function DashboardPage({
   weeklyUsage = [],
   monthlyUsage = [],
   estimatedSessionMinutes = 360,
-  currentSessionStart
+  currentSessionStart,
+  onCalibrateManual
 }: DashboardPageProps) {
   const [mockDevices, setMockDevices] = React.useState([
     {
@@ -182,6 +184,7 @@ export function DashboardPage({
           tariffBand={tariffBand}
           expectedSupplyHours={expectedSupplyHours}
           onProfileClick={onProfileClick}
+          onCalibrateManual={onCalibrateManual}
         />
 
       {powerState === "on" && (

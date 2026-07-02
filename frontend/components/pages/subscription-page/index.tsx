@@ -12,42 +12,10 @@ interface SubscriptionPageProps {
 export function SubscriptionPage({ isLoading, onActivateTrial }: SubscriptionPageProps) {
   const [screen, setScreen] = React.useState<1 | 2>(1)
   const [plan, setPlan] = React.useState<"monthly" | "annual">("monthly")
-  const [cardNumber, setCardNumber] = React.useState("")
-  const [expiry, setExpiry] = React.useState("")
-  const [cvv, setCvv] = React.useState("")
-
-  const canActivate = cardNumber.length >= 16 && expiry.length >= 4 && cvv.length >= 3
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (canActivate) {
-      onActivateTrial(plan, { cardNumber, expiry, cvv })
-    }
-  }
-
-  const formatCardNumber = (value: string) => {
-    const v = value.replace(/\s+/g, "").replace(/[^0-9]/gi, "")
-    const matches = v.match(/\d{4,16}/g)
-    const match = (matches && matches[0]) || ""
-    const parts = []
-
-    for (let i = 0, len = match.length; i < len; i += 4) {
-      parts.push(match.substring(i, i + 4))
-    }
-
-    if (parts.length > 0) {
-      return parts.join(" ")
-    } else {
-      return v
-    }
-  }
-
-  const formatExpiry = (value: string) => {
-    const v = value.replace(/\s+/g, "").replace(/[^0-9]/gi, "")
-    if (v.length >= 2) {
-      return v.substring(0, 2) + "/" + v.substring(2, 4)
-    }
-    return v
+    onActivateTrial(plan, null)
   }
 
   return (
@@ -72,7 +40,7 @@ export function SubscriptionPage({ isLoading, onActivateTrial }: SubscriptionPag
               >
                 <div className="flex flex-col">
                   <span className="font-bold text-sm text-[#121212]">Monthly Plan</span>
-                  <span className="text-xs text-[#4B5563]">₦500 / month after trial</span>
+                  <span className="text-xs text-[#4B5563]">₦1,500 / month after trial</span>
                 </div>
                 {plan === "monthly" && <IconCheck className="w-5 h-5 text-primary" />}
               </button>
@@ -90,10 +58,10 @@ export function SubscriptionPage({ isLoading, onActivateTrial }: SubscriptionPag
                   <div className="flex items-center gap-2">
                     <span className="font-bold text-sm text-[#121212]">Annual Plan</span>
                     <span className="bg-[#FFD700] text-black text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wide">
-                      Save ₦200
+                      Save ₦2,000
                     </span>
                   </div>
-                  <span className="text-xs text-[#4B5563]">₦5,800 / year after trial</span>
+                  <span className="text-xs text-[#4B5563]">₦16,000 / year after trial</span>
                 </div>
                 {plan === "annual" && <IconCheck className="w-5 h-5 text-primary" />}
               </button>
@@ -112,7 +80,7 @@ export function SubscriptionPage({ isLoading, onActivateTrial }: SubscriptionPag
               <div className="flex items-center justify-between text-xs border-t border-zinc-200/60 pt-2">
                 <span className="text-[#4B5563]">Estimated renew amount:</span>
                 <span className="font-bold text-[#121212]">
-                  {plan === "monthly" ? "₦500.00" : "₦5,800.00"}
+                  {plan === "monthly" ? "₦1,500.00" : "₦16,000.00"}
                 </span>
               </div>
             </div>
@@ -126,49 +94,39 @@ export function SubscriptionPage({ isLoading, onActivateTrial }: SubscriptionPag
         ) : (
           <form onSubmit={handleSubmit} className="flex flex-col gap-6">
             <div className="flex flex-col gap-1 text-center mt-4">
-              <h1 className="text-2xl font-bold tracking-tight text-[#121212]">Enter Card Details</h1>
+              <h1 className="text-2xl font-bold tracking-tight text-[#121212]">Verify Your Card</h1>
               <p className="text-sm text-[#4B5563]">
-                Your {plan === "monthly" ? "Monthly (₦500)" : "Annual (₦5,800)"} subscription trial will begin.
+                Secure authorization via Paystack
               </p>
             </div>
 
             <div className="flex flex-col gap-4">
-              <span className="text-xs font-bold text-[#4B5563] uppercase tracking-wider">Secure Payment Method</span>
-              <TextField
-                label="Card Number"
-                placeholder="4111 2222 3333 4444"
-                maxLength={19}
-                value={cardNumber}
-                onChange={(e) => setCardNumber(formatCardNumber(e.target.value))}
-                disabled={isLoading}
-                required
-              />
-
-              <div className="grid grid-cols-2 gap-4">
-                <TextField
-                  label="Expiry Date"
-                  placeholder="MM/YY"
-                  maxLength={5}
-                  value={expiry}
-                  onChange={(e) => setExpiry(formatExpiry(e.target.value))}
-                  disabled={isLoading}
-                  required
-                />
-                <TextField
-                  label="CVV"
-                  placeholder="123"
-                  maxLength={4}
-                  type="password"
-                  value={cvv}
-                  onChange={(e) => setCvv(e.target.value.replace(/\D/g, ""))}
-                  disabled={isLoading}
-                  required
-                />
-              </div>
+              <StandardCard className="bg-emerald-50/20 border-emerald-100/50 p-5 flex flex-col gap-3">
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs font-bold text-emerald-800 uppercase tracking-wider">Selected Plan</span>
+                  <span className="font-bold text-[#121212]">
+                    {plan === "monthly" ? "Monthly Plan (₦1,500 / month after trial)" : "Annual Plan (₦16,000 / year after trial)"}
+                  </span>
+                </div>
+                <div className="border-t border-zinc-100 my-1"></div>
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs font-bold text-emerald-800 uppercase tracking-wider">Authorization Hold</span>
+                  <p className="text-xs text-[#4B5563] leading-relaxed">
+                    A temporary verification charge of ₦100 will be authorized to link your card securely. No subscription charges will occur today.
+                  </p>
+                </div>
+                <div className="border-t border-zinc-100 my-1"></div>
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs font-bold text-emerald-800 uppercase tracking-wider">Cancellation Policy</span>
+                  <p className="text-xs text-[#4B5563] leading-relaxed">
+                    You can cancel at any time from your settings before the end of your 30-day trial to avoid any charges.
+                  </p>
+                </div>
+              </StandardCard>
 
               <div className="flex items-center gap-1.5 justify-center text-xs text-[#4B5563] mt-2">
-                <IconShieldLock className="w-4 h-4 text-emerald-600" />
-                <span>Payments secured via Paystack. Card details are encrypted.</span>
+                <IconShieldLock className="w-4 h-4 text-emerald-600 font-semibold" />
+                <span>Payments processed securely via Paystack. Card details are not stored.</span>
               </div>
             </div>
 
@@ -177,14 +135,14 @@ export function SubscriptionPage({ isLoading, onActivateTrial }: SubscriptionPag
                 <button
                   type="button"
                   onClick={() => setScreen(1)}
-                  className="w-full h-12 rounded-xl border border-zinc-200 text-zinc-600 font-semibold text-base transition-colors active:bg-zinc-50"
+                  className="w-full h-12 rounded-xl border border-zinc-200 text-zinc-600 font-semibold text-base transition-colors active:bg-zinc-50 cursor-pointer"
                 >
                   Back
                 </button>
               </div>
               <div className="flex-grow">
-                <PrimaryButton type="submit" disabled={!canActivate || isLoading} isLoading={isLoading}>
-                  Start Free Trial
+                <PrimaryButton type="submit" isLoading={isLoading} disabled={isLoading}>
+                  Verify & Start Trial
                 </PrimaryButton>
               </div>
             </div>

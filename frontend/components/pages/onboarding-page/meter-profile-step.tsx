@@ -1,6 +1,14 @@
 import * as React from "react"
 import { TextField, DropdownField } from "@/components/design-system/input"
 import { IconCheck } from "@tabler/icons-react"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
 
 interface MeterProfileStepProps {
   disco: string
@@ -86,6 +94,67 @@ export function MeterProfileStep({
         ]}
         disabled={isLoading}
       />
+
+      <div className="text-xs text-[#4B5563] -mt-2 px-1 flex items-center gap-1 select-none">
+        <span>Don&apos;t know your tariff band?</span>
+        <Dialog>
+          <DialogTrigger asChild>
+            <button
+              type="button"
+              className="font-semibold text-primary underline hover:text-[#121212] transition-colors cursor-pointer"
+            >
+              Click here
+            </button>
+          </DialogTrigger>
+          <DialogContent className="max-w-[400px]">
+            <DialogHeader>
+              <DialogTitle className="text-base font-bold text-[#052e16]">About Tariff Bands</DialogTitle>
+              <DialogDescription className="text-xs text-[#4B5563] mt-1">
+                Electricity pricing in Nigeria is organized in service bands based on daily power availability:
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex flex-col gap-3 mt-4 text-xs text-[#4B5563]">
+              <div className="border border-zinc-100 rounded-lg overflow-hidden">
+                <div className="bg-zinc-50 grid grid-cols-3 px-3 py-2 font-bold text-[#121212] border-b border-zinc-100">
+                  <span>Band</span>
+                  <span>Avg Supply</span>
+                  <span className="text-right">Avg Rate</span>
+                </div>
+                <div className="divide-y divide-zinc-50 font-medium">
+                  <div className="grid grid-cols-3 px-3 py-2">
+                    <span className="font-bold text-[#121212]">Band A</span>
+                    <span>20+ hrs/day</span>
+                    <span className="text-right font-bold text-primary">₦209.50</span>
+                  </div>
+                  <div className="grid grid-cols-3 px-3 py-2">
+                    <span className="font-bold text-[#121212]">Band B</span>
+                    <span>16+ hrs/day</span>
+                    <span className="text-right font-bold text-primary">₦61&ndash;64</span>
+                  </div>
+                  <div className="grid grid-cols-3 px-3 py-2">
+                    <span className="font-bold text-[#121212]">Band C</span>
+                    <span>12+ hrs/day</span>
+                    <span className="text-right font-bold text-primary">₦48&ndash;52</span>
+                  </div>
+                  <div className="grid grid-cols-3 px-3 py-2">
+                    <span className="font-bold text-[#121212]">Band D</span>
+                    <span>8+ hrs/day</span>
+                    <span className="text-right font-bold text-primary">₦32&ndash;43</span>
+                  </div>
+                  <div className="grid grid-cols-3 px-3 py-2">
+                    <span className="font-bold text-[#121212]">Band E</span>
+                    <span>4+ hrs/day</span>
+                    <span className="text-right font-bold text-primary">₦32&ndash;43</span>
+                  </div>
+                </div>
+              </div>
+              <p className="leading-relaxed bg-zinc-50 p-2.5 rounded-lg border border-zinc-100/50">
+                Your band is determined by the electricity feeder line servicing your area. You can find your band on your utility vendor invoice, prepaid token receipt, or by contacting your distribution company (Disco).
+              </p>
+            </div>
+          </DialogContent>
+        </Dialog>
+      </div>
 
       <TextField
         label="Meter Number"

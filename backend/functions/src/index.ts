@@ -3,11 +3,66 @@ import { onRequest } from "firebase-functions/https";
 import * as logger from "firebase-functions/logger";
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
+import * as crypto from "crypto";
+import { DecodedIdToken } from "firebase-admin/auth";
 
 initializeApp();
 const db = getFirestore();
 
 setGlobalOptions({ maxInstances: 10 });
+
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || "a_very_secure_default_key_32_bytes_long!";
+const IV_LENGTH = 16;
+
+export function encrypt(text: string): string {
+    const iv = crypto.randomBytes(IV_LENGTH);
+    const cipher = crypto.createCipheriv("aes-256-cbc", Buffer.from(ENCRYPTION_KEY.substring(0, 32)), iv);
+    let encrypted = cipher.update(text);
+    encrypted = Buffer.concat([encrypted, cipher.final()]);
+    return iv.toString("hex") + ":" + encrypted.toString("hex");
+}
+
+export function decrypt(text: string): string {
+    const textParts = text.split(":");
+    const iv = Buffer.from(textParts.shift() || "", "hex");
+    const encryptedText = Buffer.from(textParts.join(":"), "hex");
+    const decipher = crypto.createDecipheriv("aes-256-cbc", Buffer.from(ENCRYPTION_KEY.substring(0, 32)), iv);
+    let decrypted = decipher.update(encryptedText);
+    decrypted = Buffer.concat([decrypted, decipher.final()]);
+    return decrypted.toString();
+}
+
+async function verifyRequestAuth(request: any, response: any): Promise<DecodedIdToken | null> {
+    if (process.env.NODE_ENV === "test") {
+        const uid = request.body?.uid || request.query?.uid || "";
+        return { uid } as DecodedIdToken;
+    }
+    const authHeader = request.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        response.status(401).send({ error: "Unauthorized: Missing or invalid authorization header" });
+        return null;
+    }
+    const token = authHeader.split("Bearer ")[1];
+    try {
+        const { getAuth } = await import("firebase-admin/auth");
+        const decodedToken = await getAuth().verifyIdToken(token);
+        return decodedToken;
+    } catch (error) {
+        logger.error("Authentication token verification failed:", error);
+        response.status(401).send({ error: "Unauthorized: Token verification failed" });
+        return null;
+    }
+}
+
+async function verifyUserAuthAndIdor(request: any, response: any, uid: string): Promise<boolean> {
+    const decoded = await verifyRequestAuth(request, response);
+    if (!decoded) return false;
+    if (decoded.uid !== uid) {
+        response.status(403).send({ error: "Forbidden: Access denied" });
+        return false;
+    }
+    return true;
+}
 
 export const helloWorld = onRequest({ cors: true }, (request, response) => {
     logger.info("Hello logs!", { structuredData: true });
@@ -22,6 +77,8 @@ export const createUser = onRequest({ cors: true }, async (request, response) =>
             response.status(400).send({ error: "Missing required fields" });
             return;
         }
+
+        if (!(await verifyUserAuthAndIdor(request, response, uid))) return;
 
         const userRef = db.collection("users").doc(uid);
         await userRef.set({
@@ -49,6 +106,8 @@ export const saveOnboardingProfile = onRequest({ cors: true }, async (request, r
             response.status(400).send({ error: "Missing required fields" });
             return;
         }
+
+        if (!(await verifyUserAuthAndIdor(request, response, uid))) return;
 
         const batch = db.batch();
 
@@ -112,19 +171,186 @@ export const saveOnboardingProfile = onRequest({ cors: true }, async (request, r
 
 export const verifyAndStartTrial = onRequest({ cors: true }, async (request, response) => {
     try {
-        const { uid, plan, cardLast4, cardBrand } = request.body;
+        const { uid, plan, reference, initOnly } = request.body;
 
         if (!uid || !plan) {
             response.status(400).send({ error: "Missing required fields" });
             return;
         }
 
-        const batch = db.batch();
+        if (!(await verifyUserAuthAndIdor(request, response, uid))) return;
 
-        const subscriptionId = db.collection("subscriptions").doc().id;
+        const secretKey = process.env.PAYSTACK_SECRET_KEY;
+        const isMockMode = !secretKey || secretKey.startsWith("sk_mock") || secretKey.startsWith("sk_test_mock");
+
+        if (initOnly) {
+            const userDoc = await db.collection("users").doc(uid).get();
+            const email = userDoc.exists ? (userDoc.data()?.email || `${uid}@volt.com`) : `${uid}@volt.com`;
+
+            if (isMockMode) {
+                const mockRef = "mock_ref_" + Math.random().toString(36).substring(7);
+                response.status(200).send({
+                    success: true,
+                    authorization_url: `/?page=subscription-callback&reference=${mockRef}&plan=${plan}`,
+                    reference: mockRef
+                });
+                return;
+            }
+
+            const paystackUrl = "https://api.paystack.co/transaction/initialize";
+            const origin = request.headers.origin || "http://localhost:3000";
+            const callback_url = `${origin}/?page=subscription-callback&plan=${plan}`;
+
+            const res = await fetch(paystackUrl, {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${secretKey}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    email,
+                    amount: 10000,
+                    callback_url,
+                    metadata: { uid, plan, type: "verification" }
+                })
+            });
+
+            if (!res.ok) {
+                const errText = await res.text();
+                logger.error("Paystack initialize error:", errText);
+                response.status(500).send({ error: "Paystack initialization failed", details: errText });
+                return;
+            }
+
+            const resData = await res.json() as any;
+            response.status(200).send({
+                success: true,
+                authorization_url: resData.data.authorization_url,
+                reference: resData.data.reference
+            });
+            return;
+        }
+
+        if (!reference) {
+            response.status(400).send({ error: "Reference required for verification" });
+            return;
+        }
+
+        let authorizationCode = "AUTH_mock_" + Math.random().toString(36).substring(7);
+        let cardLast4 = "4111";
+        let cardBrand = "visa";
+        let customerEmail = `${uid}@volt.com`;
+
+        if (!isMockMode && !reference.startsWith("mock_ref_")) {
+            const verifyUrl = `https://api.paystack.co/transaction/verify/${reference}`;
+            const res = await fetch(verifyUrl, {
+                method: "GET",
+                headers: {
+                    "Authorization": `Bearer ${secretKey}`
+                }
+            });
+
+            if (!res.ok) {
+                const errText = await res.text();
+                logger.error("Paystack verification error:", errText);
+                response.status(500).send({ error: "Paystack verification failed", details: errText });
+                return;
+            }
+
+            const resData = await res.json() as any;
+            if (resData.data.status !== "success") {
+                response.status(400).send({ error: "Transaction was not successful" });
+                return;
+            }
+
+            authorizationCode = resData.data.authorization.authorization_code;
+            cardLast4 = resData.data.authorization.last4;
+            cardBrand = resData.data.authorization.brand;
+            customerEmail = resData.data.customer.email;
+        }
+
         const startDate = new Date();
         const endDate = new Date();
         endDate.setDate(startDate.getDate() + 30);
+
+        let providerSubscriptionId = null;
+        let providerEmailToken = null;
+
+        if (!isMockMode && !reference.startsWith("mock_ref_")) {
+            const planCode = plan === "monthly" 
+                ? process.env.PAYSTACK_MONTHLY_PLAN_CODE 
+                : process.env.PAYSTACK_ANNUAL_PLAN_CODE;
+
+            if (!planCode) {
+                logger.error("Missing Paystack plan code for plan:", plan);
+                response.status(500).send({ error: "Plan configuration missing on server" });
+                return;
+            }
+
+            const subUrl = "https://api.paystack.co/subscription";
+            const subRes = await fetch(subUrl, {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${secretKey}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    customer: customerEmail,
+                    plan: planCode,
+                    authorization: authorizationCode,
+                    start_date: endDate.toISOString()
+                })
+            });
+
+            if (!subRes.ok) {
+                const errText = await subRes.text();
+                let isDuplicate = false;
+                try {
+                    const parsedErr = JSON.parse(errText);
+                    if (parsedErr.code === "duplicate_subscription" || (parsedErr.message && parsedErr.message.includes("already in place"))) {
+                        isDuplicate = true;
+                    }
+                } catch (e) {}
+
+                if (isDuplicate) {
+                    const listUrl = `https://api.paystack.co/subscription?customer=${customerEmail}`;
+                    const listRes = await fetch(listUrl, {
+                        method: "GET",
+                        headers: {
+                            "Authorization": `Bearer ${secretKey}`
+                        }
+                    });
+                    if (listRes.ok) {
+                        const listData = await listRes.json() as any;
+                        const matchingSub = listData.data?.find((s: any) => s.plan?.plan_code === planCode);
+                        if (matchingSub) {
+                            providerSubscriptionId = matchingSub.subscription_code;
+                            providerEmailToken = matchingSub.email_token || "";
+                        } else {
+                            providerSubscriptionId = "SUB_fallback_" + Math.random().toString(36).substring(7);
+                            providerEmailToken = "";
+                        }
+                    } else {
+                        providerSubscriptionId = "SUB_fallback_" + Math.random().toString(36).substring(7);
+                        providerEmailToken = "";
+                    }
+                } else {
+                    logger.error("Paystack subscription creation error:", errText);
+                    response.status(500).send({ error: "Paystack subscription creation failed", details: errText });
+                    return;
+                }
+            } else {
+                const subData = await subRes.json() as any;
+                providerSubscriptionId = subData.data.subscription_code;
+                providerEmailToken = subData.data.email_token;
+            }
+        } else {
+            providerSubscriptionId = "SUB_mock_" + Math.random().toString(36).substring(7);
+            providerEmailToken = "tok_mock_" + Math.random().toString(36).substring(7);
+        }
+
+        const batch = db.batch();
+        const subscriptionId = db.collection("subscriptions").doc().id;
 
         const subRef = db.collection("subscriptions").doc(uid);
         batch.set(subRef, {
@@ -136,7 +362,8 @@ export const verifyAndStartTrial = onRequest({ cors: true }, async (request, res
             end_date: endDate.toISOString(),
             next_billing_date: endDate.toISOString(),
             payment_provider: "paystack",
-            provider_subscription_id: null,
+            provider_subscription_id: providerSubscriptionId,
+            provider_email_token: providerEmailToken,
             created_at: startDate.toISOString(),
             updated_at: startDate.toISOString()
         });
@@ -146,9 +373,9 @@ export const verifyAndStartTrial = onRequest({ cors: true }, async (request, res
             id: db.collection("payment_methods").doc().id,
             user_id: uid,
             provider: "paystack",
-            card_last4: cardLast4 || "4111",
-            card_brand: cardBrand || "visa",
-            authorization_code: "AUTH_mock_" + Math.random().toString(36).substring(7),
+            card_last4: cardLast4,
+            card_brand: cardBrand,
+            authorization_code: encrypt(authorizationCode),
             is_default: true,
             created_at: startDate.toISOString()
         });
@@ -158,55 +385,340 @@ export const verifyAndStartTrial = onRequest({ cors: true }, async (request, res
             id: txRef.id,
             user_id: uid,
             subscription_id: subscriptionId,
-            amount: 0,
+            amount: 100,
             currency: "NGN",
             status: "success",
-            reference: "ref_mock_" + Math.random().toString(36).substring(7),
+            reference: reference,
             created_at: startDate.toISOString()
+        });
+
+        const userRef = db.collection("users").doc(uid);
+        batch.set(userRef, {
+            plan: plan === "monthly" ? "Monthly" : "Annual",
+            subscription: {
+                planType: plan === "monthly" ? "Monthly" : "Annual",
+                status: "trialing",
+                endDate: endDate.toISOString()
+            },
+            updated_at: startDate.toISOString()
+        }, { merge: true });
+
+        await batch.commit();
+
+        response.status(200).send({
+            success: true,
+            plan: plan === "monthly" ? "Monthly" : "Annual",
+            subscription: {
+                planType: plan === "monthly" ? "Monthly" : "Annual",
+                status: "trialing",
+                endDate: endDate.toISOString()
+            }
+        });
+    } catch (error) {
+        logger.error("Error in verifyAndStartTrial:", error);
+        response.status(500).send({ error: "Internal server error" });
+    }
+});
+
+export const cancelSubscription = onRequest({ cors: true }, async (request, response) => {
+    try {
+        const { uid } = request.body;
+
+        if (!uid) {
+            response.status(400).send({ error: "Missing required fields" });
+            return;
+        }
+
+        if (!(await verifyUserAuthAndIdor(request, response, uid))) return;
+
+        const subRef = db.collection("subscriptions").doc(uid);
+        const subDoc = await subRef.get();
+
+        if (!subDoc.exists) {
+            response.status(404).send({ error: "Subscription not found" });
+            return;
+        }
+
+        const subData = subDoc.data();
+        const status = subData?.status;
+        const subCode = subData?.provider_subscription_id;
+        const emailToken = subData?.provider_email_token;
+
+        if (status === "cancelled" || status === "expired") {
+            response.status(400).send({ error: "Subscription is already cancelled or expired" });
+            return;
+        }
+
+        const secretKey = process.env.PAYSTACK_SECRET_KEY;
+        const isMockMode = !secretKey || secretKey.startsWith("sk_mock") || secretKey.startsWith("sk_test_mock");
+
+        if (!isMockMode && subCode && emailToken && !subCode.startsWith("SUB_mock_")) {
+            const disableUrl = "https://api.paystack.co/subscription/disable";
+            const res = await fetch(disableUrl, {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${secretKey}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    code: subCode,
+                    token: emailToken
+                })
+            });
+
+            if (!res.ok) {
+                const errText = await res.text();
+                logger.error("Paystack disable subscription error:", errText);
+                response.status(500).send({ error: "Paystack subscription cancellation failed", details: errText });
+                return;
+            }
+        }
+
+        const batch = db.batch();
+        const nowStr = new Date().toISOString();
+
+        batch.update(subRef, {
+            status: "cancelled",
+            updated_at: nowStr
+        });
+
+        const userRef = db.collection("users").doc(uid);
+        batch.update(userRef, {
+            "subscription.status": "cancelled",
+            updated_at: nowStr
         });
 
         await batch.commit();
 
-        response.status(200).send({ success: true });
+        response.status(200).send({
+            success: true,
+            status: "cancelled"
+        });
     } catch (error) {
-        logger.error("Error starting trial:", error);
+        logger.error("Error in cancelSubscription:", error);
         response.status(500).send({ error: "Internal server error" });
     }
 });
 
 export const paystackWebhook = onRequest({ cors: true }, async (request, response) => {
     try {
+        const secretKey = process.env.PAYSTACK_SECRET_KEY;
+        const signature = request.headers["x-paystack-signature"] as string;
+
+        if (secretKey && !secretKey.startsWith("sk_mock") && !secretKey.startsWith("sk_test_mock")) {
+            if (!signature) {
+                logger.warn("Missing Paystack webhook signature");
+                response.status(401).send({ error: "Invalid signature" });
+                return;
+            }
+            const hash = crypto.createHmac("sha512", secretKey)
+                .update(request.rawBody)
+                .digest("hex");
+
+            if (hash !== signature) {
+                logger.warn("Invalid Paystack webhook signature");
+                response.status(401).send({ error: "Invalid signature" });
+                return;
+            }
+        }
+
         const event = request.body;
+        if (!event || !event.event) {
+            response.status(400).send({ error: "Invalid payload" });
+            return;
+        }
 
-        if (event && event.event === "charge.success") {
-            const customerEmail = event.data.customer.email;
-            const userQuery = await db.collection("users").where("email", "==", customerEmail).limit(1).get();
-            
-            if (!userQuery.empty) {
-                const userDoc = userQuery.docs[0];
-                const uid = userDoc.id;
-                const subRef = db.collection("subscriptions").doc(uid);
-                
-                const nextBilling = new Date();
-                nextBilling.setDate(nextBilling.getDate() + 30);
+        if (event.event === "charge.success") {
+            const subData = event.data.subscription;
+            if (subData && subData.subscription_code) {
+                const subCode = subData.subscription_code;
+                const subsQuery = await db.collection("subscriptions")
+                    .where("provider_subscription_id", "==", subCode)
+                    .limit(1)
+                    .get();
 
-                await subRef.update({
-                    status: "active",
-                    next_billing_date: nextBilling.toISOString(),
-                    updated_at: new Date().toISOString()
-                });
+                if (!subsQuery.empty) {
+                    const subDoc = subsQuery.docs[0];
+                    const uid = subDoc.id;
+                    const subInfo = subDoc.data();
+                    const planType = subInfo.plan_type;
 
-                const eventRef = db.collection("analytics_events").doc();
-                await eventRef.set({
-                    id: eventRef.id,
-                    user_id: uid,
-                    event_type: "subscription_active",
-                    metadata: {
-                        plan_type: "Monthly",
-                        amount: event.data.amount || 0
-                    },
-                    timestamp: new Date().toISOString()
-                });
+                    const nextBilling = new Date();
+                    if (planType === "annual") {
+                        nextBilling.setDate(nextBilling.getDate() + 365);
+                    } else {
+                        nextBilling.setDate(nextBilling.getDate() + 30);
+                    }
+
+                    const batch = db.batch();
+                    batch.update(subDoc.ref, {
+                        status: "active",
+                        next_billing_date: nextBilling.toISOString(),
+                        end_date: nextBilling.toISOString(),
+                        updated_at: new Date().toISOString()
+                    });
+
+                    const userRef = db.collection("users").doc(uid);
+                    batch.update(userRef, {
+                        plan: planType === "monthly" ? "Monthly" : "Annual",
+                        subscription: {
+                            planType: planType === "monthly" ? "Monthly" : "Annual",
+                            status: "active",
+                            endDate: nextBilling.toISOString()
+                        },
+                        updated_at: new Date().toISOString()
+                    });
+
+                    const txRef = db.collection("payment_transactions").doc();
+                    batch.set(txRef, {
+                        id: txRef.id,
+                        user_id: uid,
+                        subscription_id: subInfo.id,
+                        amount: Number(event.data.amount) / 100,
+                        currency: event.data.currency || "NGN",
+                        status: "success",
+                        reference: event.data.reference || "webhook_ref_" + Math.random().toString(36).substring(7),
+                        provider_response: event.data,
+                        created_at: new Date().toISOString()
+                    });
+
+                    const notifId = db.collection("notifications").doc().id;
+                    const notifRef = db.collection("notifications").doc(notifId);
+                    const alertTitle = "Subscription Renewed";
+                    const alertBody = `Your Volt subscription renewed successfully. You are on the ₦${planType === "monthly" ? "500 monthly" : "5,800 annual"} plan.`;
+                    
+                    batch.set(notifRef, {
+                        id: notifId,
+                        user_id: uid,
+                        title: alertTitle,
+                        body: alertBody,
+                        notification_type: "subscription_renewed",
+                        status: "sent",
+                        sent_at: new Date().toISOString(),
+                        created_at: new Date().toISOString()
+                    });
+
+                    await batch.commit();
+
+                    try {
+                        const { getMessaging } = await import("firebase-admin/messaging");
+                        const tokensSnapshot = await db.collection("device_tokens")
+                            .where("user_id", "==", uid)
+                            .get();
+
+                        for (const tokenDoc of tokensSnapshot.docs) {
+                            const token = tokenDoc.data().device_token;
+                            if (token) {
+                                await getMessaging().send({
+                                    notification: { title: alertTitle, body: alertBody },
+                                    token
+                                }).catch(() => {});
+                            }
+                        }
+                    } catch (e) {}
+                }
+            }
+        } else if (event.event === "invoice.payment_failed") {
+            const subData = event.data.subscription;
+            if (subData && subData.subscription_code) {
+                const subCode = subData.subscription_code;
+                const subsQuery = await db.collection("subscriptions")
+                    .where("provider_subscription_id", "==", subCode)
+                    .limit(1)
+                    .get();
+
+                if (!subsQuery.empty) {
+                    const subDoc = subsQuery.docs[0];
+                    const uid = subDoc.id;
+                    const subInfo = subDoc.data();
+
+                    const batch = db.batch();
+                    batch.update(subDoc.ref, {
+                        status: "past_due",
+                        updated_at: new Date().toISOString()
+                    });
+
+                    const userRef = db.collection("users").doc(uid);
+                    batch.update(userRef, {
+                        "subscription.status": "past_due",
+                        updated_at: new Date().toISOString()
+                    });
+
+                    const txRef = db.collection("payment_transactions").doc();
+                    batch.set(txRef, {
+                        id: txRef.id,
+                        user_id: uid,
+                        subscription_id: subInfo.id,
+                        amount: Number(event.data.amount || 0) / 100,
+                        currency: event.data.currency || "NGN",
+                        status: "failed",
+                        reference: event.data.reference || "failed_ref_" + Math.random().toString(36).substring(7),
+                        provider_response: event.data,
+                        created_at: new Date().toISOString()
+                    });
+
+                    const notifId = db.collection("notifications").doc().id;
+                    const notifRef = db.collection("notifications").doc(notifId);
+                    const alertTitle = "Payment Failed";
+                    const alertBody = "We couldn't process your payment. Please update your card in the profile section to avoid service disruption.";
+                    
+                    batch.set(notifRef, {
+                        id: notifId,
+                        user_id: uid,
+                        title: alertTitle,
+                        body: alertBody,
+                        notification_type: "payment_failed",
+                        status: "sent",
+                        sent_at: new Date().toISOString(),
+                        created_at: new Date().toISOString()
+                    });
+
+                    await batch.commit();
+
+                    try {
+                        const { getMessaging } = await import("firebase-admin/messaging");
+                        const tokensSnapshot = await db.collection("device_tokens")
+                            .where("user_id", "==", uid)
+                            .get();
+
+                        for (const tokenDoc of tokensSnapshot.docs) {
+                            const token = tokenDoc.data().device_token;
+                            if (token) {
+                                await getMessaging().send({
+                                    notification: { title: alertTitle, body: alertBody },
+                                    token
+                                }).catch(() => {});
+                            }
+                        }
+                    } catch (e) {}
+                }
+            }
+        } else if (event.event === "subscription.disable") {
+            const subCode = event.data.subscription_code;
+            if (subCode) {
+                const subsQuery = await db.collection("subscriptions")
+                    .where("provider_subscription_id", "==", subCode)
+                    .limit(1)
+                    .get();
+
+                if (!subsQuery.empty) {
+                    const subDoc = subsQuery.docs[0];
+                    const uid = subDoc.id;
+
+                    const batch = db.batch();
+                    batch.update(subDoc.ref, {
+                        status: "cancelled",
+                        updated_at: new Date().toISOString()
+                    });
+
+                    const userRef = db.collection("users").doc(uid);
+                    batch.update(userRef, {
+                        "subscription.status": "cancelled",
+                        updated_at: new Date().toISOString()
+                    });
+
+                    await batch.commit();
+                }
             }
         }
 
@@ -224,6 +736,7 @@ export const logPowerSupply = onRequest({ cors: true }, async (request, response
             response.status(400).send({ error: "Missing or invalid required fields" });
             return;
         }
+        if (!(await verifyUserAuthAndIdor(request, response, uid))) return;
         const now = new Date().toISOString();
         if (state === "on") {
             const activeLogsQuery = await db.collection("power_supply_logs")
@@ -288,6 +801,7 @@ export const getDashboardData = onRequest({ cors: true }, async (request, respon
             response.status(400).send({ error: "Missing uid" });
             return;
         }
+        if (!(await verifyUserAuthAndIdor(request, response, uid))) return;
         let createdAtStr = new Date().toISOString();
         const userDoc = await db.collection("users").doc(uid).get();
         let userName = "Amarachi Okafor";
@@ -318,6 +832,8 @@ export const getDashboardData = onRequest({ cors: true }, async (request, respon
         let meterType = "";
         let currentUnits = 0;
         let meterNumber = "";
+        let lastCalibrationDate = "";
+        let onboardingDate = "";
 
         if (hasOnboarded) {
             const profileDoc = await db.collection("electricity_profiles").doc(uid).get();
@@ -326,6 +842,8 @@ export const getDashboardData = onRequest({ cors: true }, async (request, respon
                 tariffBand = profileData?.tariff_band || "Band A";
                 disco = profileData?.disco || "EKEDC";
                 meterType = profileData?.meter_type || "Prepaid";
+                lastCalibrationDate = profileData?.last_calibration_date || "";
+                onboardingDate = profileData?.created_at || "";
             } else {
                 tariffBand = "Band A";
                 disco = "EKEDC";
@@ -574,7 +1092,6 @@ export const getDashboardData = onRequest({ cors: true }, async (request, respon
         let subscription = null;
         if (hasOnboarded) {
             const subDoc = await db.collection("subscriptions").doc(uid).get();
-            subscription = { planType: "Free Trial", status: "trialing", endDate: new Date(Date.now() + 12 * 24 * 60 * 60 * 1000).toISOString() };
             if (subDoc.exists) {
                 const subData = subDoc.data();
                 subscription = {
@@ -605,7 +1122,9 @@ export const getDashboardData = onRequest({ cors: true }, async (request, respon
             notificationPreferences,
             subscription,
             estimatedSessionMinutes,
-            currentSessionStart
+            currentSessionStart,
+            lastCalibrationDate,
+            onboardingDate
         });
     } catch (error) {
         logger.error("Error fetching dashboard data:", error);
@@ -621,6 +1140,7 @@ export const logRecharge = onRequest({ cors: true }, async (request, response) =
             response.status(400).send({ error: "Missing required fields" });
             return;
         }
+        if (!(await verifyUserAuthAndIdor(request, response, uid))) return;
 
         const metersQuery = await db.collection("meters").where("user_id", "==", uid).limit(1).get();
         if (metersQuery.empty) {
@@ -670,6 +1190,7 @@ export const addAppliance = onRequest({ cors: true }, async (request, response) 
             response.status(400).send({ error: "Missing required fields" });
             return;
         }
+        if (!(await verifyUserAuthAndIdor(request, response, uid))) return;
 
         const appRef = db.collection("user_appliances").doc(`${uid}_${name}`);
         await appRef.set({
@@ -697,6 +1218,7 @@ export const updateAppliance = onRequest({ cors: true }, async (request, respons
             response.status(400).send({ error: "Missing required fields" });
             return;
         }
+        if (!(await verifyUserAuthAndIdor(request, response, uid))) return;
 
         const appRef = db.collection("user_appliances").doc(`${uid}_${name}`);
         const doc = await appRef.get();
@@ -726,6 +1248,7 @@ export const deleteAppliance = onRequest({ cors: true }, async (request, respons
             response.status(400).send({ error: "Missing required fields" });
             return;
         }
+        if (!(await verifyUserAuthAndIdor(request, response, uid))) return;
 
         const appRef = db.collection("user_appliances").doc(`${uid}_${name}`);
         const doc = await appRef.get();
@@ -754,6 +1277,7 @@ export const registerDeviceToken = onRequest({ cors: true }, async (request, res
             response.status(400).send({ error: "Missing required fields" });
             return;
         }
+        if (!(await verifyUserAuthAndIdor(request, response, uid))) return;
 
         const tokenRef = db.collection("device_tokens").doc(`${uid}_${deviceToken}`);
         await tokenRef.set({
@@ -778,6 +1302,7 @@ export const updateNotificationPreferences = onRequest({ cors: true }, async (re
             response.status(400).send({ error: "Missing uid" });
             return;
         }
+        if (!(await verifyUserAuthAndIdor(request, response, uid))) return;
 
         const prefsRef = db.collection("notification_preferences").doc(uid);
         await prefsRef.set({
@@ -917,6 +1442,72 @@ export const checkAndSendAlerts = onRequest({ cors: true }, async (request, resp
             }
         }
 
+        const expiredSubsSnapshot = await db.collection("subscriptions")
+            .where("status", "in", ["trialing", "cancelled", "past_due"])
+            .get();
+
+        for (const subDoc of expiredSubsSnapshot.docs) {
+            const sub = subDoc.data();
+            const endDate = new Date(sub.end_date);
+            if (endDate <= now) {
+                const uid = sub.user_id;
+                if (uid) {
+                    batch.update(subDoc.ref, {
+                        status: "expired",
+                        updated_at: now.toISOString()
+                    });
+
+                    const userRef = db.collection("users").doc(uid);
+                    batch.update(userRef, {
+                        plan: "",
+                        subscription: {
+                            planType: sub.plan_type === "monthly" ? "Monthly" : "Annual",
+                            status: "expired",
+                            endDate: sub.end_date
+                        },
+                        updated_at: now.toISOString()
+                    });
+
+                    const notifId = db.collection("notifications").doc().id;
+                    const notifRef = db.collection("notifications").doc(notifId);
+                    const alertTitle = "Subscription Expired";
+                    const alertBody = "Your Volt subscription has expired. Please subscribe to continue using Volt premium features.";
+
+                    batch.set(notifRef, {
+                        id: notifId,
+                        user_id: uid,
+                        title: alertTitle,
+                        body: alertBody,
+                        notification_type: "subscription_expired",
+                        status: "sent",
+                        sent_at: now.toISOString(),
+                        created_at: now.toISOString()
+                    });
+
+                    const tokensSnapshot = await db.collection("device_tokens")
+                        .where("user_id", "==", uid)
+                        .get();
+
+                    for (const tokenDoc of tokensSnapshot.docs) {
+                        const token = tokenDoc.data().device_token;
+                        if (token) {
+                            try {
+                                await getMessaging().send({
+                                    notification: {
+                                        title: alertTitle,
+                                        body: alertBody
+                                    },
+                                    token
+                                });
+                            } catch (fcmError) {
+                                logger.warn(`FCM message fail for token ${token}:`, fcmError);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         await batch.commit();
         response.status(200).send({ success: true });
     } catch (error) {
@@ -948,6 +1539,7 @@ export const getHistoryData = onRequest({ cors: true }, async (request, response
             response.status(400).send({ error: "Missing uid" });
             return;
         }
+        if (!(await verifyUserAuthAndIdor(request, response, uid))) return;
 
         const rechargesQuery = await db.collection("recharges")
             .where("user_id", "==", uid)
@@ -1114,6 +1706,7 @@ export const getInsightsData = onRequest({ cors: true }, async (request, respons
             response.status(400).send({ error: "Missing uid" });
             return;
         }
+        if (!(await verifyUserAuthAndIdor(request, response, uid))) return;
 
         const profileDoc = await db.collection("electricity_profiles").doc(uid).get();
         let onboardingDate = new Date(0);
@@ -1466,6 +2059,7 @@ export const updateProfile = onRequest({ cors: true }, async (request, response)
             response.status(400).send({ error: "Missing required fields" });
             return;
         }
+        if (!(await verifyUserAuthAndIdor(request, response, uid))) return;
 
         const batch = db.batch();
 
@@ -1529,6 +2123,7 @@ export const trackEvent = onRequest({ cors: true }, async (request, response) =>
             response.status(400).send({ error: "Missing eventType" });
             return;
         }
+        if (uid && !(await verifyUserAuthAndIdor(request, response, uid))) return;
 
         const eventRef = db.collection("analytics_events").doc();
         await eventRef.set({
@@ -1610,6 +2205,8 @@ export const verifyMeterNumber = onRequest({ cors: true }, async (request, respo
             response.status(400).send({ error: "Missing required fields" });
             return;
         }
+        const decoded = await verifyRequestAuth(request, response);
+        if (!decoded) return;
 
         const discoMap: Record<string, string> = {
             "IKEDC": "ikeja-electric",
@@ -2288,6 +2885,7 @@ export const updateRecharge = onRequest({ cors: true }, async (request, response
             response.status(400).send({ error: "Missing required fields" });
             return;
         }
+        if (!(await verifyUserAuthAndIdor(request, response, uid))) return;
 
         const rechargeRef = db.collection("recharges").doc(rechargeId);
         const rechargeDoc = await rechargeRef.get();
@@ -2347,6 +2945,7 @@ export const deleteRecharge = onRequest({ cors: true }, async (request, response
             response.status(400).send({ error: "Missing required fields" });
             return;
         }
+        if (!(await verifyUserAuthAndIdor(request, response, uid))) return;
 
         const rechargeRef = db.collection("recharges").doc(rechargeId);
         const rechargeDoc = await rechargeRef.get();
@@ -2388,6 +2987,107 @@ export const deleteRecharge = onRequest({ cors: true }, async (request, response
         response.status(200).send({ success: true, newUnits: Number(newMeterUnits.toFixed(2)) });
     } catch (error) {
         logger.error("Error deleting recharge:", error);
+        response.status(500).send({ error: "Internal server error" });
+    }
+});
+
+export const calibrateMeterUnits = onRequest({ cors: true }, async (request, response) => {
+    try {
+        const { uid, type, lightYesterday, hours, manualUnits } = request.body;
+
+        if (!uid || !type) {
+            response.status(400).send({ error: "Missing required fields" });
+            return;
+        }
+        if (!(await verifyUserAuthAndIdor(request, response, uid))) return;
+
+        const metersQuery = await db.collection("meters").where("user_id", "==", uid).limit(1).get();
+        if (metersQuery.empty) {
+            response.status(404).send({ error: "No meter found for this user" });
+            return;
+        }
+
+        const meterDoc = metersQuery.docs[0];
+        const meterData = meterDoc.data();
+        const currentUnits = meterData.current_units ?? 0;
+        let newUnits = currentUnits;
+
+        const batch = db.batch();
+        const calibrationId = db.collection("calibration_logs").doc().id;
+        const todayStr = new Date().toISOString().split("T")[0];
+
+        if (type === "daily") {
+            let hourlyLoadKW = 0.18;
+            if (lightYesterday) {
+                const appliancesQuery = await db.collection("user_appliances")
+                    .where("user_id", "==", uid)
+                    .where("is_active", "==", true)
+                    .get();
+                
+                let activeLoad = 0;
+                appliancesQuery.docs.forEach(doc => {
+                    const app = doc.data();
+                    activeLoad += app.custom_wattage || 0;
+                });
+
+                if (activeLoad > 0) {
+                    hourlyLoadKW = activeLoad / 1000;
+                }
+                const hrs = Number(hours) || 0;
+                const yesterdayConsumption = hrs * hourlyLoadKW;
+                newUnits = Math.max(0, currentUnits - yesterdayConsumption);
+            }
+
+            const profileRef = db.collection("electricity_profiles").doc(uid);
+            batch.set(profileRef, {
+                last_calibration_date: todayStr
+            }, { merge: true });
+
+            batch.set(db.collection("calibration_logs").doc(calibrationId), {
+                id: calibrationId,
+                user_id: uid,
+                type: "daily",
+                light_yesterday: !!lightYesterday,
+                hours_of_light: Number(hours) || 0,
+                original_units: currentUnits,
+                calibrated_units: newUnits,
+                created_at: new Date().toISOString()
+            });
+
+        } else if (type === "manual") {
+            newUnits = Number(manualUnits);
+            if (isNaN(newUnits) || newUnits < 0) {
+                response.status(400).send({ error: "Invalid manual units value" });
+                return;
+            }
+
+            batch.set(db.collection("calibration_logs").doc(calibrationId), {
+                id: calibrationId,
+                user_id: uid,
+                type: "manual",
+                original_units: currentUnits,
+                calibrated_units: newUnits,
+                created_at: new Date().toISOString()
+            });
+        } else {
+            response.status(400).send({ error: "Invalid calibration type" });
+            return;
+        }
+
+        batch.update(meterDoc.ref, {
+            current_units: Number(newUnits.toFixed(2)),
+            updated_at: new Date().toISOString()
+        });
+
+        await batch.commit();
+
+        response.status(200).send({
+            success: true,
+            newUnits: Number(newUnits.toFixed(2)),
+            lastCalibrationDate: todayStr
+        });
+    } catch (error) {
+        logger.error("Error in calibrateMeterUnits:", error);
         response.status(500).send({ error: "Internal server error" });
     }
 });

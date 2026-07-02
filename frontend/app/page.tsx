@@ -15,6 +15,8 @@ import { ProfilePage } from "@/components/pages/profile-page"
 import { HistoryPage } from "@/components/pages/history-page"
 import { DevicesPage } from "@/components/pages/devices-page"
 import { SurgeChecklistPage } from "@/components/pages/surge-checklist-page"
+import { TermsPage } from "@/components/pages/terms-page"
+import { PrivacyPage } from "@/components/pages/privacy-page"
 import { BottomNavigation, TabType } from "@/components/design-system/bottom-navigation"
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail, onAuthStateChanged, signOut } from "firebase/auth"
 import { auth, getFcmToken, onMessageListener } from "@/lib/firebase"
@@ -47,6 +49,7 @@ function PageContent() {
       status: string
       endDate: string
     }
+    lastCalibrationDate?: string
   } | null>(null)
 
   const [isLoading, setIsLoading] = React.useState(false)
@@ -86,6 +89,8 @@ function PageContent() {
     tariffBand?: string
     estimatedSessionMinutes?: number
     currentSessionStart?: string
+    lastCalibrationDate?: string
+    onboardingDate?: string
   } | null>(null)
 
   const [isHistoryLoading, setIsHistoryLoading] = React.useState(true)
@@ -122,7 +127,7 @@ function PageContent() {
     })
     const cachedUser = typeof window !== "undefined" ? localStorage.getItem("volt_user") : null
     const parsedUser = cachedUser ? JSON.parse(cachedUser) : null
-    const createdTime = parsedUser?.created_at ? new Date(parsedUser.created_at).getTime() : (auth.currentUser?.metadata.creationTime ? new Date(auth.currentUser.metadata.creationTime).getTime() : Date.now())
+    const createdTime = parsedUser?.created_at ? new Date(parsedUser.created_at).getTime() : (auth.currentUser?.metadata?.creationTime ? new Date(auth.currentUser.metadata.creationTime).getTime() : Date.now())
     const isNewUser = (Date.now() - createdTime) < 24 * 60 * 60 * 1000
 
     let dailyBurnRate = 0
@@ -177,6 +182,14 @@ function PageContent() {
         return res.json()
       })
       .then((data) => {
+        if (data.hasOnboarded === false) {
+          setUser(null)
+          if (typeof window !== "undefined") {
+            localStorage.removeItem("volt_user")
+          }
+          navigateTo("onboarding")
+          return
+        }
         setDashboardData(data)
         if (data.appliances && typeof window !== "undefined") {
           localStorage.setItem("volt_appliances", JSON.stringify(data.appliances))
@@ -198,7 +211,8 @@ function PageContent() {
             currentUnits: data.remainingUnits ?? (prev?.currentUnits ?? 0),
             plan: pPlan,
             notificationPreferences: data.notificationPreferences || prev?.notificationPreferences,
-            subscription: data.subscription || prev?.subscription
+            subscription: data.subscription || prev?.subscription,
+            lastCalibrationDate: data.lastCalibrationDate || prev?.lastCalibrationDate
           }
         })
       })
@@ -267,7 +281,7 @@ function PageContent() {
         const appliancesList = cachedApps ? JSON.parse(cachedApps) : []
         const cachedUser = typeof window !== "undefined" ? localStorage.getItem("volt_user") : null
         const parsedUser = cachedUser ? JSON.parse(cachedUser) : null
-        const createdTime = parsedUser?.created_at ? new Date(parsedUser.created_at).getTime() : (auth.currentUser?.metadata.creationTime ? new Date(auth.currentUser.metadata.creationTime).getTime() : Date.now())
+        const createdTime = parsedUser?.created_at ? new Date(parsedUser.created_at).getTime() : (auth.currentUser?.metadata?.creationTime ? new Date(auth.currentUser.metadata.creationTime).getTime() : Date.now())
         const isNewUser = (Date.now() - createdTime) < 24 * 60 * 60 * 1000
 
         let dailyBurn = 0
@@ -404,7 +418,7 @@ function PageContent() {
     if (!authResolved) return
 
     if (!user) {
-      if (!["splash", "signup", "login", "otp"].includes(pageParam)) {
+      if (!["splash", "signup", "login", "otp", "terms", "privacy"].includes(pageParam)) {
         navigateTo("login")
       }
     } else {
@@ -413,11 +427,11 @@ function PageContent() {
           navigateTo("onboarding")
         }
       } else if (!user.plan) {
-        if (pageParam !== "subscription") {
+        if (pageParam !== "subscription" && pageParam !== "subscription-callback") {
           navigateTo("subscription")
         }
       } else {
-        if (["splash", "login", "signup", "otp", "onboarding", "subscription"].includes(pageParam)) {
+        if (["splash", "login", "signup", "otp", "onboarding", "subscription", "subscription-callback"].includes(pageParam)) {
           navigateTo("dashboard")
         }
       }
@@ -515,6 +529,76 @@ function PageContent() {
       }
     }
   }, [user, authResolved])
+
+  React.useEffect(() => {
+    if (pageParam === "subscription-callback") {
+      const reference = searchParams.get("reference")
+      const plan = searchParams.get("plan") || "monthly"
+      if (!reference) {
+        toast.error("Invalid payment reference received.")
+        navigateTo("subscription")
+        return
+      }
+
+      setIsLoading(true)
+      const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
+      const uid = auth.currentUser?.uid || "mock-uid"
+
+      fetch(`${backendUrl}/verifyAndStartTrial`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          uid,
+          plan,
+          reference
+        })
+      })
+        .then((res) => {
+          if (!res.ok) throw new Error("Payment verification failed")
+          return res.json() as Promise<{
+            plan: string
+            subscription: { planType: string; status: string; endDate: string }
+          }>
+        })
+        .then((data) => {
+          if (user) {
+            const updatedUser = {
+              ...user,
+              plan: data.plan,
+              subscription: data.subscription
+            }
+            setUser(updatedUser)
+            localStorage.setItem("volt_user", JSON.stringify(updatedUser))
+          }
+          trackAnalyticsEvent("trial_start", { plan })
+          toast.success("Card verified and 30-day free trial started successfully!")
+          navigateTo("dashboard")
+        })
+        .catch((err) => {
+          console.error(err)
+          toast.error("Failed to verify card. Please try again.")
+          navigateTo("subscription")
+        })
+        .finally(() => {
+          setIsLoading(false)
+        })
+    }
+  }, [pageParam, searchParams, user])
+
+  React.useEffect(() => {
+    if (pageParam === "dashboard" && dashboardData && user?.meterNumber) {
+      const todayStr = new Date().toISOString().split("T")[0]
+      const lastCalDate = dashboardData.lastCalibrationDate || ""
+      const onboardingDateStr = dashboardData.onboardingDate ? dashboardData.onboardingDate.split("T")[0] : ""
+      if (todayStr !== onboardingDateStr && lastCalDate !== todayStr) {
+        const cachedCalibratedToday = localStorage.getItem(`volt_calibrated_${todayStr}`)
+        if (!cachedCalibratedToday) {
+          setShowCalibrationPopup(true)
+          localStorage.setItem(`volt_calibrated_${todayStr}`, "true")
+        }
+      }
+    }
+  }, [pageParam, dashboardData, user?.meterNumber])
 
 
   const handleBack = () => {
@@ -786,11 +870,57 @@ function PageContent() {
       })
   }
 
+  const [isCancelling, setIsCancelling] = React.useState(false)
+  const [showCalibrationPopup, setShowCalibrationPopup] = React.useState(false)
+  const [showManualCalibration, setShowManualCalibration] = React.useState(false)
+  const [lightYesterday, setLightYesterday] = React.useState(true)
+  const [lightHours, setLightHours] = React.useState(12)
+  const [manualUnitsInput, setManualUnitsInput] = React.useState("")
+
+  const handleCalibrateUnits = async (payload: { type: "daily" | "manual"; lightYesterday?: boolean; hours?: number; manualUnits?: number }) => {
+    setIsLoading(true)
+    const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
+    const uid = auth.currentUser?.uid || "mock-uid"
+
+    try {
+      const res = await fetch(`${backendUrl}/calibrateMeterUnits`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uid, ...payload })
+      })
+
+      if (!res.ok) throw new Error("Calibration failed")
+      const data = await res.json() as { success: boolean; newUnits: number; lastCalibrationDate: string }
+
+      if (user) {
+        const updatedUser = {
+          ...user,
+          currentUnits: data.newUnits,
+          lastCalibrationDate: data.lastCalibrationDate
+        }
+        setUser(updatedUser)
+        localStorage.setItem("volt_user", JSON.stringify(updatedUser))
+      }
+      if (dashboardData) {
+        setDashboardData({
+          ...dashboardData,
+          remainingUnits: data.newUnits,
+          lastCalibrationDate: data.lastCalibrationDate
+        })
+      }
+      toast.success("Meter calibrated successfully!")
+    } catch (err) {
+      console.error(err)
+      toast.error("Failed to calibrate meter. Please try again.")
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
   const handleActivateTrial = (plan: "monthly" | "annual", cardData: any) => {
     setIsLoading(true)
     const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
     const uid = auth.currentUser?.uid || "mock-uid"
-    const cardLast4 = cardData.cardNumber ? cardData.cardNumber.replace(/\s+/g, "").slice(-4) : "4111"
 
     fetch(`${backendUrl}/verifyAndStartTrial`, {
       method: "POST",
@@ -798,33 +928,61 @@ function PageContent() {
       body: JSON.stringify({
         uid,
         plan,
-        cardLast4,
-        cardBrand: "visa"
+        initOnly: true
       })
     })
-      .then(() => {
-        if (user) {
-          setUser({
-            ...user,
-            plan: plan === "monthly" ? "Monthly" : "Annual"
-          })
+      .then((res) => {
+        if (!res.ok) throw new Error("Payment initialization failed")
+        return res.json() as Promise<{ authorization_url: string }>
+      })
+      .then((data) => {
+        if (data.authorization_url) {
+          window.location.href = data.authorization_url
+        } else {
+          throw new Error("Invalid response from server")
         }
-        trackAnalyticsEvent("trial_start", { plan })
-        navigateTo("dashboard")
       })
       .catch((err) => {
         console.error(err)
-        if (user) {
-          setUser({
-            ...user,
-            plan: plan === "monthly" ? "Monthly" : "Annual"
-          })
-        }
-        navigateTo("dashboard")
-      })
-      .finally(() => {
+        toast.error("Failed to initialize payment checkout. Please try again.")
         setIsLoading(false)
       })
+  }
+
+  const handleCancelSubscription = async () => {
+    setIsCancelling(true)
+    const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
+    const uid = auth.currentUser?.uid || "mock-uid"
+
+    try {
+      const res = await fetch(`${backendUrl}/cancelSubscription`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uid })
+      })
+
+      if (!res.ok) throw new Error("Cancellation failed")
+
+      if (user) {
+        const updatedUser = {
+          ...user,
+          subscription: {
+            ...user.subscription,
+            status: "cancelled",
+            planType: user.subscription?.planType || "Monthly",
+            endDate: user.subscription?.endDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+          }
+        }
+        setUser(updatedUser)
+        localStorage.setItem("volt_user", JSON.stringify(updatedUser))
+      }
+      toast.success("Subscription cancelled successfully. You will keep premium access until the end of your billing cycle.")
+    } catch (err) {
+      console.error(err)
+      toast.error("Failed to cancel subscription. Please check your network and try again.")
+    } finally {
+      setIsCancelling(false)
+    }
   }
 
   const handleTogglePower = (state: "on" | "off") => {
@@ -1204,15 +1362,10 @@ function PageContent() {
     tariffBand: "Band A",
     meterType: "Prepaid",
     currentUnits: 18.4,
-    plan: "Monthly",
+    plan: "",
     notificationPreferences: {
       dailyReminders: true,
       lowUnitAlerts: true
-    },
-    subscription: {
-      planType: "Free Trial",
-      status: "trialing",
-      endDate: "2026-06-24T12:00:00.000Z"
     }
   }
 
@@ -1242,6 +1395,8 @@ function PageContent() {
             onNavigateToLogin={() => navigateTo("login")}
             onValidatePassword={handleValidatePassword}
             onBack={() => navigateTo("splash&slide=2", true)}
+            onNavigateToTerms={() => navigateTo("terms")}
+            onNavigateToPrivacy={() => navigateTo("privacy")}
           />
         )}
         {pageParam === "otp" && (
@@ -1274,8 +1429,23 @@ function PageContent() {
         {pageParam === "subscription" && (
           <SubscriptionPage isLoading={isLoading} onActivateTrial={handleActivateTrial} />
         )}
+        {pageParam === "subscription-callback" && (
+          <div className="flex-grow flex flex-col items-center justify-center p-6 bg-white gap-4">
+            <div className="w-12 h-12 rounded-full border-4 border-zinc-200 border-t-primary animate-spin"></div>
+            <div className="flex flex-col gap-1 text-center">
+              <h2 className="text-lg font-bold text-[#121212]">Verifying Card</h2>
+              <p className="text-xs text-[#4B5563]">Processing secure authorization with Paystack...</p>
+            </div>
+          </div>
+        )}
         {pageParam === "surge-checklist" && (
           <SurgeChecklistPage onBack={handleBack} />
+        )}
+        {pageParam === "terms" && (
+          <TermsPage onBack={handleBack} />
+        )}
+        {pageParam === "privacy" && (
+          <PrivacyPage onBack={handleBack} />
         )}
         {pageParam === "dashboard" && (
           <DashboardPage
@@ -1302,6 +1472,7 @@ function PageContent() {
             monthlyUsage={insightsData?.monthlyUsage || []}
             estimatedSessionMinutes={dashboardData?.estimatedSessionMinutes ?? 0}
             currentSessionStart={dashboardData?.currentSessionStart}
+            onCalibrateManual={() => setShowManualCalibration(true)}
           />
         )}
         {pageParam === "calculator" && (
@@ -1412,6 +1583,8 @@ function PageContent() {
             onVerifyMeter={handleVerifyMeter}
             isLoading={isDashboardLoading || !dashboardData}
             isSubmitting={isSubmitting}
+            onCancelSubscription={handleCancelSubscription}
+            isCancelling={isCancelling}
           />
         )}
         {pageParam === "history" && (
@@ -1431,6 +1604,152 @@ function PageContent() {
           activeTab={pageParam as TabType}
           onTabChange={handleTabChange}
         />
+      )}
+
+      {showCalibrationPopup && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6 select-none animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-sm flex flex-col gap-4 shadow-xl border border-zinc-100 animate-in zoom-in-95 duration-200">
+            <div className="flex flex-col gap-1">
+              <h3 className="text-lg font-black text-[#121212] tracking-tight">Daily Calibration</h3>
+              <p className="text-xs text-zinc-500 leading-normal">
+                Let's calibrate your prepaid meter units to keep estimates accurate.
+              </p>
+            </div>
+            
+            <div className="flex flex-col gap-3 my-2">
+              <span className="text-xs font-bold text-[#121212]">Was there light yesterday?</span>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setLightYesterday(true)}
+                  className={`py-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
+                    lightYesterday 
+                      ? "border-primary bg-emerald-50/50 text-primary ring-1 ring-primary"
+                      : "border-zinc-200 text-zinc-600 hover:bg-zinc-50"
+                  }`}
+                >
+                  Yes, there was light
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLightYesterday(false)}
+                  className={`py-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
+                    !lightYesterday 
+                      ? "border-primary bg-emerald-50/50 text-primary ring-1 ring-primary"
+                      : "border-zinc-200 text-zinc-600 hover:bg-zinc-50"
+                  }`}
+                >
+                  No light at all
+                </button>
+              </div>
+
+              {lightYesterday && (
+                <div className="flex flex-col gap-2 mt-2">
+                  <div className="flex justify-between text-xs font-bold text-zinc-700">
+                    <span>For how many hours?</span>
+                    <span className="text-primary">{lightHours} hrs</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="24"
+                    value={lightHours}
+                    onChange={(e) => setLightHours(Number(e.target.value))}
+                    className="w-full accent-primary cursor-pointer h-1.5 bg-zinc-200 rounded-lg appearance-none"
+                  />
+                  <div className="flex justify-between text-[9px] font-bold text-zinc-400">
+                    <span>0h</span>
+                    <span>12h</span>
+                    <span>24h</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 mt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCalibrationPopup(false)
+                }}
+                className="flex-1 py-3 rounded-xl border border-zinc-200 text-xs font-bold text-zinc-600 hover:bg-zinc-50 cursor-pointer"
+              >
+                Skip
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  await handleCalibrateUnits({
+                    type: "daily",
+                    lightYesterday,
+                    hours: lightYesterday ? lightHours : 0
+                  })
+                  setShowCalibrationPopup(false)
+                }}
+                className="flex-1 py-3 rounded-xl bg-primary text-white text-xs font-bold hover:bg-emerald-600 cursor-pointer"
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showManualCalibration && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6 select-none animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-sm flex flex-col gap-4 shadow-xl border border-zinc-100 animate-in zoom-in-95 duration-200">
+            <div className="flex flex-col gap-1">
+              <h3 className="text-lg font-black text-[#121212] tracking-tight">Manual Calibration</h3>
+              <p className="text-xs text-zinc-500 leading-normal">
+                Enter your physical prepaid meter reading to sync your balance.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-1 mt-2">
+              <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Remaining Units (kWh)</label>
+              <input
+                type="number"
+                step="0.01"
+                placeholder="e.g. 15.25"
+                value={manualUnitsInput}
+                onChange={(e) => setManualUnitsInput(e.target.value)}
+                className="w-full h-11 border border-zinc-200 rounded-xl px-4 text-sm font-bold text-[#121212] focus:border-primary focus:ring-1 focus:ring-primary outline-none"
+              />
+            </div>
+
+            <div className="flex items-center gap-2 mt-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowManualCalibration(false)
+                  setManualUnitsInput("")
+                }}
+                className="flex-1 py-3 rounded-xl border border-zinc-200 text-xs font-bold text-zinc-600 hover:bg-zinc-50 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const val = parseFloat(manualUnitsInput)
+                  if (isNaN(val) || val < 0) {
+                    toast.error("Please enter a valid amount of remaining units.")
+                    return
+                  }
+                  await handleCalibrateUnits({
+                    type: "manual",
+                    manualUnits: val
+                  })
+                  setShowManualCalibration(false)
+                  setManualUnitsInput("")
+                }}
+                className="flex-1 py-3 rounded-xl bg-primary text-white text-xs font-bold hover:bg-emerald-600 cursor-pointer"
+              >
+                Sync Meter
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

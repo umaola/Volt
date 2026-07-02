@@ -59,6 +59,7 @@ interface ExpandedHeaderProps {
   tariffBand: string
   expectedSupplyHours: number
   onProfileClick: () => void
+  onCalibrateManual?: () => void
 }
 
 export function ExpandedHeader({
@@ -66,7 +67,8 @@ export function ExpandedHeader({
   remainingUnits,
   tariffBand,
   expectedSupplyHours,
-  onProfileClick
+  onProfileClick,
+  onCalibrateManual
 }: ExpandedHeaderProps) {
   const initials = userName
     ? userName

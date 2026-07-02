@@ -14,6 +14,7 @@ This version has breaking changes — APIs, conventions, and file structure may 
 8. Make sure pages and sections always have thier skeleton loading component.
 9. This is a mobile app, so the header, body or footer to look like that of a mobile app.
 10. Periodically review all the documents in the documentations folder for changes and implement the changes.
+11. Only implement what has been instructed.
 
 # Component Design
 

@@ -1,0 +1,16 @@
+{
+  "projectId": "prj_UgaMHNZpC99q6yzgrulYrtffjUwx",
+  "orgId": "team_ikOc8kdTAwqLEcNDAQgjrEpy",
+  "projectName": "volt-five-kappa",
+  "settings": {
+    "createdAt": 1781710798539,
+    "framework": "nextjs",
+    "devCommand": null,
+    "installCommand": null,
+    "buildCommand": null,
+    "outputDirectory": null,
+    "rootDirectory": null,
+    "directoryListing": false,
+    "nodeVersion": "24.x"
+  }
+}

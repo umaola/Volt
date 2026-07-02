@@ -2,8 +2,9 @@ import * as React from "react"
 import { TextField, DropdownField } from "@/components/design-system/input"
 import { PrimaryButton, GhostButton } from "@/components/design-system/button"
 import { StandardCard } from "@/components/design-system/card"
-import { IconUser, IconCreditCard, IconBell, IconShieldLock, IconCheck } from "@tabler/icons-react"
+import { IconUser, IconCreditCard, IconBell, IconShieldLock, IconCheck, IconArrowUpRight } from "@tabler/icons-react"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Switch } from "@/components/ui/switch"
 
 
 
@@ -37,6 +38,8 @@ interface ProfilePageProps {
   ) => Promise<{ success: boolean; customerName?: string; error?: string }>
   isLoading: boolean
   isSubmitting?: boolean
+  onCancelSubscription?: () => Promise<void>
+  isCancelling?: boolean
 }
 
 export function ProfilePage({
@@ -47,7 +50,9 @@ export function ProfilePage({
   onNavigateTo,
   onVerifyMeter,
   isLoading,
-  isSubmitting = false
+  isSubmitting = false,
+  onCancelSubscription,
+  isCancelling = false
 }: ProfilePageProps) {
   const [phone, setPhone] = React.useState(userData.phone)
   const [meterNumber, setMeterNumber] = React.useState(userData.meterNumber)
@@ -64,6 +69,7 @@ export function ProfilePage({
   const [isVerifying, setIsVerifying] = React.useState(false)
   const [verificationError, setVerificationError] = React.useState<string | null>(null)
   const [mounted, setMounted] = React.useState(false)
+  const [showCancelConfirm, setShowCancelConfirm] = React.useState(false)
 
   React.useEffect(() => {
     setMounted(true)
@@ -304,18 +310,11 @@ export function ProfilePage({
                 <span className="font-bold text-[#121212]">Daily Reminders</span>
                 <span className="text-[#4B5563]">Outage hours and consumption confirmation</span>
               </div>
-              <div className="relative flex items-center justify-center w-4 h-4 shrink-0">
-                <input
-                  type="checkbox"
-                  checked={notifDaily}
-                  onChange={handleToggleDaily}
-                  className="appearance-none w-4 h-4 rounded border-2 border-primary bg-transparent focus:outline-none cursor-pointer transition-all checked:border-primary disabled:opacity-50"
-                  disabled={isLoading || isSubmitting}
-                />
-                {notifDaily && (
-                  <IconCheck className="absolute w-3 h-3 pointer-events-none stroke-[3] text-primary" />
-                )}
-              </div>
+              <Switch
+                checked={notifDaily}
+                onCheckedChange={handleToggleDaily}
+                disabled={isLoading || isSubmitting}
+              />
             </div>
 
             <div className="flex items-center justify-between text-xs border-t border-zinc-100 pt-3">
@@ -323,18 +322,46 @@ export function ProfilePage({
                 <span className="font-bold text-[#121212]">Low Unit Alerts</span>
                 <span className="text-[#4B5563]">Reminders when credits fall below 20 units</span>
               </div>
-              <div className="relative flex items-center justify-center w-4 h-4 shrink-0">
-                <input
-                  type="checkbox"
-                  checked={notifLowUnit}
-                  onChange={handleToggleLowUnit}
-                  className="appearance-none w-4 h-4 rounded border-2 border-primary bg-transparent focus:outline-none cursor-pointer transition-all checked:border-primary disabled:opacity-50"
-                  disabled={isLoading || isSubmitting}
-                />
-                {notifLowUnit && (
-                  <IconCheck className="absolute w-3 h-3 pointer-events-none stroke-[3] text-primary" />
-                )}
+              <Switch
+                checked={notifLowUnit}
+                onCheckedChange={handleToggleLowUnit}
+                disabled={isLoading || isSubmitting}
+              />
+            </div>
+          </StandardCard>
+
+          <StandardCard className="flex flex-col gap-4">
+            <div className="flex items-center gap-2 border-b border-zinc-100 pb-3">
+              <IconShieldLock className="w-5 h-5 text-primary" />
+              <span className="text-xs font-bold text-[#4B5563] uppercase tracking-wider">Legal</span>
+            </div>
+
+            <div className="flex items-center justify-between text-xs">
+              <div className="flex flex-col">
+                <span className="font-bold text-[#121212]">Terms of Use</span>
+                <span className="text-[#4B5563]">Read our terms of service agreement</span>
               </div>
+              <button
+                type="button"
+                onClick={() => onNavigateTo("terms")}
+                className="text-primary hover:text-[#121212] transition-colors cursor-pointer p-1"
+              >
+                <IconArrowUpRight className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between text-xs border-t border-zinc-100 pt-3">
+              <div className="flex flex-col">
+                <span className="font-bold text-[#121212]">Privacy Policy</span>
+                <span className="text-[#4B5563]">How we protect and manage your personal data</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => onNavigateTo("privacy")}
+                className="text-primary hover:text-[#121212] transition-colors cursor-pointer p-1"
+              >
+                <IconArrowUpRight className="w-5 h-5" />
+              </button>
             </div>
           </StandardCard>
 
@@ -390,6 +417,45 @@ export function ProfilePage({
                     </span>
                   </div>
 
+                  {onCancelSubscription && (sub.status === "trialing" || sub.status === "active" || sub.status === "past_due") && (
+                    <div className="mt-3 pt-3 border-t border-zinc-100/50 flex flex-col gap-2">
+                      {showCancelConfirm ? (
+                        <div className="flex flex-col gap-2 bg-red-50/50 border border-red-100/80 p-3 rounded-lg">
+                          <p className="text-[11px] text-red-800 leading-normal">
+                            Are you sure you want to cancel your premium subscription? You will still keep access until your trial/cycle ends on {formatEnd(sub.endDate)}.
+                          </p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <button
+                              type="button"
+                              onClick={() => setShowCancelConfirm(false)}
+                              className="px-3 py-1.5 rounded-md border border-zinc-200 text-zinc-600 text-xs font-semibold cursor-pointer"
+                            >
+                              No, Keep It
+                            </button>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                await onCancelSubscription();
+                                setShowCancelConfirm(false);
+                              }}
+                              disabled={isCancelling}
+                              className="px-3 py-1.5 rounded-md bg-red-600 text-white text-xs font-semibold hover:bg-red-700 disabled:opacity-50 cursor-pointer"
+                            >
+                              {isCancelling ? "Cancelling..." : "Yes, Cancel"}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setShowCancelConfirm(true)}
+                          className="w-full h-9 rounded-lg border border-red-200 hover:bg-red-50/40 text-red-600 text-xs font-semibold transition-colors cursor-pointer"
+                        >
+                          Cancel Subscription
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               )
             })()}

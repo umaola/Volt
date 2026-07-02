@@ -32,10 +32,14 @@ export const getFcmToken = async () => {
   if (!supported) {
     return null
   }
+  const vapidKey = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY
+  if (!vapidKey) {
+    return null
+  }
   try {
     const messaging = getMessaging(app)
     const token = await getToken(messaging, {
-      vapidKey: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
+      vapidKey,
     })
     return token
   } catch (error) {
@@ -64,4 +68,21 @@ export const onMessageListener = async (callback: (payload: any) => void) => {
 }
 
 export { app, auth }
+
+if (typeof window !== "undefined") {
+  const originalFetch = window.fetch
+  window.fetch = async (url: RequestInfo | URL, options?: RequestInit) => {
+    const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
+    if (backendUrl && typeof url === "string" && url.startsWith(backendUrl)) {
+      const token = auth.currentUser ? await auth.currentUser.getIdToken() : ""
+      const headers = {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...(token ? { "Authorization": `Bearer ${token}` } : {})
+      }
+      return originalFetch(url, { ...options, headers })
+    }
+    return originalFetch(url, options)
+  }
+}
 
