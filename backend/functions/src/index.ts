@@ -9,7 +9,7 @@ import { DecodedIdToken } from "firebase-admin/auth";
 initializeApp();
 const db = getFirestore();
 
-setGlobalOptions({ maxInstances: 10 });
+setGlobalOptions({ maxInstances: 10, invoker: "public" });
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || "a_very_secure_default_key_32_bytes_long!";
 const IV_LENGTH = 16;
@@ -39,6 +39,10 @@ async function verifyRequestAuth(request: any, response: any): Promise<DecodedId
     }
     const authHeader = request.headers.authorization;
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        if (process.env.FUNCTIONS_EMULATOR === "true") {
+            const uid = request.body?.uid || request.query?.uid || "mock-uid";
+            return { uid } as DecodedIdToken;
+        }
         response.status(401).send({ error: "Unauthorized: Missing or invalid authorization header" });
         return null;
     }
@@ -48,6 +52,10 @@ async function verifyRequestAuth(request: any, response: any): Promise<DecodedId
         const decodedToken = await getAuth().verifyIdToken(token);
         return decodedToken;
     } catch (error) {
+        if (process.env.FUNCTIONS_EMULATOR === "true") {
+            const uid = request.body?.uid || request.query?.uid || "mock-uid";
+            return { uid } as DecodedIdToken;
+        }
         logger.error("Authentication token verification failed:", error);
         response.status(401).send({ error: "Unauthorized: Token verification failed" });
         return null;
@@ -452,25 +460,55 @@ export const cancelSubscription = onRequest({ cors: true }, async (request, resp
         const secretKey = process.env.PAYSTACK_SECRET_KEY;
         const isMockMode = !secretKey || secretKey.startsWith("sk_mock") || secretKey.startsWith("sk_test_mock");
 
-        if (!isMockMode && subCode && emailToken && !subCode.startsWith("SUB_mock_")) {
-            const disableUrl = "https://api.paystack.co/subscription/disable";
-            const res = await fetch(disableUrl, {
-                method: "POST",
-                headers: {
-                    "Authorization": `Bearer ${secretKey}`,
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    code: subCode,
-                    token: emailToken
-                })
-            });
+        if (!isMockMode && subCode && !subCode.startsWith("SUB_mock_")) {
+            let tokenToUse = emailToken;
+            if (!tokenToUse) {
+                const getUrl = `https://api.paystack.co/subscription/${subCode}`;
+                const getRes = await fetch(getUrl, {
+                    method: "GET",
+                    headers: {
+                        "Authorization": `Bearer ${secretKey}`
+                    }
+                });
+                if (getRes.ok) {
+                    const getData = await getRes.json() as any;
+                    tokenToUse = getData.data?.email_token;
+                }
+            }
 
-            if (!res.ok) {
-                const errText = await res.text();
-                logger.error("Paystack disable subscription error:", errText);
-                response.status(500).send({ error: "Paystack subscription cancellation failed", details: errText });
-                return;
+            if (tokenToUse) {
+                const disableUrl = "https://api.paystack.co/subscription/disable";
+                const res = await fetch(disableUrl, {
+                    method: "POST",
+                    headers: {
+                        "Authorization": `Bearer ${secretKey}`,
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        code: subCode,
+                        token: tokenToUse
+                    })
+                });
+
+                if (!res.ok) {
+                    const errText = await res.text();
+                    logger.error("Paystack disable subscription error:", errText);
+                    let isAlreadyDisabled = false;
+                    try {
+                        const parsed = JSON.parse(errText);
+                        const msg = (parsed.message || "").toLowerCase();
+                        if (msg.includes("already") || msg.includes("inactive") || msg.includes("disabled") || msg.includes("cancelled")) {
+                            isAlreadyDisabled = true;
+                        }
+                    } catch (e) {}
+
+                    if (!isAlreadyDisabled) {
+                        response.status(500).send({ error: "Paystack subscription cancellation failed", details: errText });
+                        return;
+                    }
+                }
+            } else {
+                logger.warn("Could not retrieve email token for subscription:", subCode);
             }
         }
 
@@ -885,17 +923,16 @@ export const getDashboardData = onRequest({ cors: true }, async (request, respon
             tariffRate = ratesMap[tariffBand] ?? 209.50;
         }
         const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
-        const logsQuery1 = await db.collection("power_supply_logs")
+        const allLogsQuery = await db.collection("power_supply_logs")
             .where("user_id", "==", uid)
-            .where("power_on", ">=", cutoff.toISOString())
-            .get();
-        const logsQuery2 = await db.collection("power_supply_logs")
-            .where("user_id", "==", uid)
-            .where("power_off", "==", null)
             .get();
         const logsMap = new Map();
-        logsQuery1.docs.forEach(doc => logsMap.set(doc.id, doc.data()));
-        logsQuery2.docs.forEach(doc => logsMap.set(doc.id, doc.data()));
+        allLogsQuery.docs.forEach(doc => {
+            const data = doc.data();
+            if ((data.power_on || "") >= cutoff.toISOString() || data.power_off === null) {
+                logsMap.set(doc.id, data);
+            }
+        });
         const logs = Array.from(logsMap.values());
         let totalSeconds = 0;
         const cutoffTime = cutoff.getTime();
@@ -1018,9 +1055,10 @@ export const getDashboardData = onRequest({ cors: true }, async (request, respon
             const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
             const cutoffLogsQuery = await db.collection("power_supply_logs")
                 .where("user_id", "==", uid)
-                .where("power_on", ">=", sevenDaysAgo.toISOString())
                 .get();
-            const supplyLogsList = cutoffLogsQuery.docs.map(doc => doc.data());
+            const supplyLogsList = cutoffLogsQuery.docs
+                .map(doc => doc.data())
+                .filter(data => (data.power_on || "") >= sevenDaysAgo.toISOString());
 
             const dailySupplyHours = new Array(7).fill(0);
             const nowTime = Date.now();
@@ -1395,10 +1433,13 @@ export const checkAndSendAlerts = onRequest({ cors: true }, async (request, resp
 
         const subsSnapshot = await db.collection("subscriptions")
             .where("status", "==", "trialing")
-            .where("end_date", "<=", threeDaysFromNow.toISOString())
             .get();
+        const trialEndingDocs = subsSnapshot.docs.filter(doc => {
+            const data = doc.data();
+            return (data.end_date || "") <= threeDaysFromNow.toISOString();
+        });
 
-        for (const subDoc of subsSnapshot.docs) {
+        for (const subDoc of trialEndingDocs) {
             const sub = subDoc.data();
             const uid = sub.user_id;
 
@@ -1780,9 +1821,10 @@ export const getInsightsData = onRequest({ cors: true }, async (request, respons
         const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
         const supplyLogsQuery = await db.collection("power_supply_logs")
             .where("user_id", "==", uid)
-            .where("power_on", ">=", thirtyDaysAgo.toISOString())
             .get();
-        const supplyLogs = supplyLogsQuery.docs.map(doc => doc.data());
+        const supplyLogs = supplyLogsQuery.docs
+            .map(doc => doc.data())
+            .filter(data => (data.power_on || "") >= thirtyDaysAgo.toISOString());
 
         const dailySupplyHours = new Array(14).fill(0);
         for (let i = 13; i >= 0; i--) {
@@ -2522,12 +2564,15 @@ export const reportOutage = onRequest({ cors: true }, async (request, response) 
             .where("state", "==", state)
             .where("city", "==", city)
             .where("status", "==", "outage")
-            .where("created_at", ">=", fifteenMinsAgo.toISOString())
             .get();
+        const recentReports = recentReportsQuery.docs.filter(doc => {
+            const data = doc.data();
+            return (data.created_at || "") >= fifteenMinsAgo.toISOString();
+        });
 
         const distinctUsers = new Set<string>();
 
-        for (const doc of recentReportsQuery.docs) {
+        for (const doc of recentReports) {
             const data = doc.data();
             const distance = (lat !== 0 && lon !== 0 && data.latitude !== 0 && data.longitude !== 0) 
                 ? calculateDistance(lat, lon, data.latitude, data.longitude)
@@ -2677,11 +2722,14 @@ export const reportPowerBack = onRequest({ cors: true }, async (request, respons
             .where("state", "==", state)
             .where("city", "==", city)
             .where("status", "==", "power_back")
-            .where("created_at", ">=", fifteenMinsAgo.toISOString())
             .get();
+        const recentReports = recentReportsQuery.docs.filter(doc => {
+            const data = doc.data();
+            return (data.created_at || "") >= fifteenMinsAgo.toISOString();
+        });
 
         const distinctUsers = new Set<string>();
-        for (const doc of recentReportsQuery.docs) {
+        for (const doc of recentReports) {
             const data = doc.data();
             const distance = (lat !== 0 && lon !== 0 && data.latitude !== 0 && data.longitude !== 0) 
                 ? calculateDistance(lat, lon, data.latitude, data.longitude)
@@ -2840,13 +2888,16 @@ export const exportOutageHistory = onRequest({ cors: true }, async (request, res
 
         const logsQuery = await db.collection("power_supply_logs")
             .where("user_id", "==", uid)
-            .where("power_on", ">=", cutoff.toISOString())
             .get();
+        const logs = logsQuery.docs.filter(doc => {
+            const data = doc.data();
+            return (data.power_on || "") >= cutoff.toISOString();
+        });
 
         let totalSupplyHours = 0;
         const events: any[] = [];
 
-        logsQuery.docs.forEach(doc => {
+        logs.forEach(doc => {
             const data = doc.data();
             const duration = data.duration_hours || 0;
             totalSupplyHours += duration;
@@ -3009,7 +3060,7 @@ export const calibrateMeterUnits = onRequest({ cors: true }, async (request, res
 
         const meterDoc = metersQuery.docs[0];
         const meterData = meterDoc.data();
-        const currentUnits = meterData.current_units ?? 0;
+        const currentUnits = Number(meterData.current_units ?? 0);
         let newUnits = currentUnits;
 
         const batch = db.batch();
@@ -3027,7 +3078,7 @@ export const calibrateMeterUnits = onRequest({ cors: true }, async (request, res
                 let activeLoad = 0;
                 appliancesQuery.docs.forEach(doc => {
                     const app = doc.data();
-                    activeLoad += app.custom_wattage || 0;
+                    activeLoad += Number(app.custom_wattage) || 0;
                 });
 
                 if (activeLoad > 0) {

@@ -18,7 +18,7 @@ import { SurgeChecklistPage } from "@/components/pages/surge-checklist-page"
 import { TermsPage } from "@/components/pages/terms-page"
 import { PrivacyPage } from "@/components/pages/privacy-page"
 import { BottomNavigation, TabType } from "@/components/design-system/bottom-navigation"
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail, onAuthStateChanged, signOut } from "firebase/auth"
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail, onAuthStateChanged, signOut, sendEmailVerification } from "firebase/auth"
 import { auth, getFcmToken, onMessageListener } from "@/lib/firebase"
 import { toast } from "sonner"
 
@@ -338,6 +338,11 @@ function PageContent() {
         setDashboardData(null)
         setAuthResolved(true)
       } else {
+        if (!firebaseUser.emailVerified) {
+          setAuthResolved(true)
+          navigateTo("otp")
+          return
+        }
         const urlParams = new URLSearchParams(window.location.search)
         const currentPage = urlParams.get("page") || "splash"
         if (currentPage === "otp") {
@@ -415,6 +420,38 @@ function PageContent() {
   }, [])
 
   React.useEffect(() => {
+    if (pageParam !== "otp" || !auth.currentUser) return
+
+    const interval = setInterval(() => {
+      auth.currentUser?.reload()
+        .then(() => {
+          if (auth.currentUser?.emailVerified) {
+            clearInterval(interval)
+            const name = signupTempData?.name || auth.currentUser.displayName || "User"
+            const email = auth.currentUser.email || ""
+            setUser({
+              name,
+              email,
+              phone: "",
+              meterNumber: "",
+              disco: "",
+              tariffBand: "",
+              meterType: "",
+              currentUnits: 0,
+              plan: ""
+            })
+            navigateTo("onboarding")
+          }
+        })
+        .catch((err) => {
+          console.error("Error polling verification status:", err)
+        })
+    }, 3000)
+
+    return () => clearInterval(interval)
+  }, [pageParam, signupTempData])
+
+  React.useEffect(() => {
     if (!authResolved) return
 
     if (!user) {
@@ -422,6 +459,9 @@ function PageContent() {
         navigateTo("login")
       }
     } else {
+      if (pageParam === "otp") {
+        return
+      }
       if (!user.meterNumber) {
         if (pageParam !== "onboarding") {
           navigateTo("onboarding")
@@ -624,26 +664,18 @@ function PageContent() {
   }
 
   const handleSignup = (signupData: { name: string; email: string; password: string }) => {
-    setSignupError(null)
-    setSignupTempData(signupData)
-    navigateTo("otp")
-  }
-
-  const handleVerifyOtp = (code: string) => {
-    if (!signupTempData) return
     setIsLoading(true)
     setSignupError(null)
-
-    if (code !== "123456") {
-      setSignupError("Invalid verification code. Please try again.")
-      setIsLoading(false)
-      return
-    }
-
-    const { name, email, password } = signupTempData
+    setSignupTempData(signupData)
+    const { name, email, password } = signupData
 
     createUserWithEmailAndPassword(auth, email, password)
       .then((result) => {
+        sendEmailVerification(result.user)
+          .catch((verifErr) => {
+            console.error("Verification email failed to send:", verifErr)
+          })
+        
         const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
         fetch(`${backendUrl}/createUser`, {
           method: "POST",
@@ -657,34 +689,12 @@ function PageContent() {
         })
           .then(() => {
             trackAnalyticsEvent("signup", { name, email })
-            setUser({
-              name,
-              email,
-              phone: "",
-              meterNumber: "",
-              disco: "",
-              tariffBand: "",
-              meterType: "",
-              currentUnits: 0,
-              plan: ""
-            })
-            navigateTo("onboarding")
+            navigateTo("otp")
           })
           .catch((err) => {
             console.error("Backend createUser sync failed:", err)
             trackAnalyticsEvent("signup", { name, email, syncError: true })
-            setUser({
-              name,
-              email,
-              phone: "",
-              meterNumber: "",
-              disco: "",
-              tariffBand: "",
-              meterType: "",
-              currentUnits: 0,
-              plan: ""
-            })
-            navigateTo("onboarding")
+            navigateTo("otp")
           })
           .finally(() => {
             setIsLoading(false)
@@ -693,35 +703,78 @@ function PageContent() {
       .catch((error) => {
         console.error("Signup failed:", error)
         if (error.code === "auth/email-already-in-use") {
-          setSignupError("This email address is already registered.")
-          navigateTo("signup")
-          setIsLoading(false)
-        } else {
-          if (process.env.NODE_ENV === "development") {
-            setUser({
-              name,
-              email,
-              phone: "",
-              meterNumber: "",
-              disco: "",
-              tariffBand: "",
-              meterType: "",
-              currentUnits: 0,
-              plan: ""
+          signInWithEmailAndPassword(auth, email, password)
+            .then((res) => {
+              trackAnalyticsEvent("login", { email })
+              if (!res.user.emailVerified) {
+                sendEmailVerification(res.user)
+                  .catch((e) => console.error("Verification email failed to send:", e))
+              }
             })
-            navigateTo("onboarding")
-            setIsLoading(false)
-          } else {
-            setSignupError(error.message || "An unexpected error occurred.")
-            navigateTo("signup")
-            setIsLoading(false)
-          }
+            .catch((loginErr) => {
+              console.error("Auto-login fallback failed:", loginErr)
+              setSignupError("This email address is already registered.")
+              setIsLoading(false)
+            })
+        } else {
+          setSignupError(error.message || "An unexpected error occurred.")
+          setIsLoading(false)
         }
       })
   }
 
+  const handleVerifyOtp = () => {
+    setIsLoading(true)
+    setSignupError(null)
+    if (!auth.currentUser) {
+      setIsLoading(false)
+      return
+    }
+    auth.currentUser.reload()
+      .then(() => {
+        if (auth.currentUser?.emailVerified) {
+          const name = signupTempData?.name || auth.currentUser.displayName || "User"
+          const email = auth.currentUser.email || ""
+          setUser({
+            name,
+            email,
+            phone: "",
+            meterNumber: "",
+            disco: "",
+            tariffBand: "",
+            meterType: "",
+            currentUnits: 0,
+            plan: ""
+          })
+          navigateTo("onboarding")
+        } else {
+          setSignupError("Please click the verification link sent to your email to verify your address.")
+        }
+      })
+      .catch((err) => {
+        console.error(err)
+        setSignupError("Failed to check verification status. Please try again.")
+      })
+      .finally(() => {
+        setIsLoading(false)
+      })
+  }
+
   const handleResendOtp = () => {
-    console.log("OTP code resent successfully.")
+    if (auth.currentUser) {
+      setIsLoading(true)
+      sendEmailVerification(auth.currentUser)
+        .then(() => {
+          toast.success("Verification email resent successfully.")
+        })
+        .catch((err) => {
+          console.error(err)
+          toast.error("Failed to resend verification email. Please try again.")
+        })
+        .finally(() => {
+          setIsLoading(false)
+        })
+    }
   }
 
   const handleVerifyMeter = React.useCallback((meterNumber: string, disco: string, meterType: string) => {
@@ -764,6 +817,10 @@ function PageContent() {
     signInWithEmailAndPassword(auth, email, password)
       .then((result) => {
         trackAnalyticsEvent("login", { email })
+        if (!result.user.emailVerified) {
+          sendEmailVerification(result.user)
+            .catch((e) => console.error("Verification email failed to send on login:", e))
+        }
       })
       .catch((error) => {
         console.error("Login failed:", error)
@@ -1388,27 +1445,29 @@ function PageContent() {
             autoPlay={slideParam === null}
           />
         )}
-        {pageParam === "signup" && (
-          <SignupPage
-            isLoading={isLoading}
-            error={signupError}
-            onSignup={handleSignup}
-            onNavigateToLogin={() => navigateTo("login")}
-            onValidatePassword={handleValidatePassword}
-            onBack={() => navigateTo("splash&slide=2", true)}
-            onNavigateToTerms={() => navigateTo("terms")}
-            onNavigateToPrivacy={() => navigateTo("privacy")}
-          />
-        )}
-        {pageParam === "otp" && (
-          <OtpPage
-            isLoading={isLoading}
-            error={signupError}
-            email={signupTempData?.email || ""}
-            onVerify={handleVerifyOtp}
-            onResend={handleResendOtp}
-            onBack={() => navigateTo("signup", true)}
-          />
+        {(pageParam === "signup" || pageParam === "otp") && (
+          <div className="relative w-full h-full flex flex-col">
+            <SignupPage
+              isLoading={isLoading || pageParam === "otp"}
+              error={pageParam === "signup" ? signupError : null}
+              onSignup={handleSignup}
+              onNavigateToLogin={() => navigateTo("login")}
+              onValidatePassword={handleValidatePassword}
+              onBack={() => navigateTo("splash&slide=2", true)}
+              onNavigateToTerms={() => navigateTo("terms")}
+              onNavigateToPrivacy={() => navigateTo("privacy")}
+            />
+            {pageParam === "otp" && (
+              <OtpPage
+                isLoading={isLoading}
+                error={signupError}
+                email={signupTempData?.email || auth.currentUser?.email || ""}
+                onVerify={handleVerifyOtp}
+                onResend={handleResendOtp}
+                onBack={() => navigateTo("signup", true)}
+              />
+            )}
+          </div>
         )}
         {pageParam === "login" && (
           <LoginPage

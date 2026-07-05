@@ -1,16 +1,14 @@
 "use client"
 
 import * as React from "react"
-import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp"
 import { PrimaryButton } from "@/components/design-system/button"
-import { IconArrowLeft } from "@tabler/icons-react"
-import { REGEXP_ONLY_DIGITS } from "input-otp"
+import { IconMail } from "@tabler/icons-react"
 
 interface OtpPageProps {
   isLoading: boolean
   error?: string | null
   email: string
-  onVerify: (code: string) => void
+  onVerify: () => void
   onResend: () => void
   onBack: () => void
 }
@@ -23,7 +21,6 @@ export function OtpPage({
   onResend,
   onBack
 }: OtpPageProps) {
-  const [code, setCode] = React.useState("")
   const [countdown, setCountdown] = React.useState(30)
 
   React.useEffect(() => {
@@ -42,98 +39,72 @@ export function OtpPage({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (code.length === 6 && !isLoading) {
-      onVerify(code)
+    if (!isLoading) {
+      onVerify()
     }
   }
 
   return (
-    <div className="flex-grow flex flex-col justify-between p-6 bg-white overflow-y-auto w-full max-w-md mx-auto select-none relative">
-      <div className="flex flex-col gap-6">
-        <button
-          type="button"
-          onClick={onBack}
-          className="self-start text-[#4B5563] hover:text-[#121212] transition-colors -ml-1 mt-2"
-          disabled={isLoading}
-        >
-          <IconArrowLeft className="w-6 h-6" />
-        </button>
-
-        <div className="flex flex-col items-center gap-6 mt-2">
-          <div className="w-[120px] h-[50px] relative flex items-center justify-center">
-            <img
-              src="/logo-bold.png"
-              alt="Volt Logo"
-              className="w-full h-full object-contain"
-            />
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in">
+      <div className="bg-white rounded-3xl p-6 shadow-2xl w-full max-w-sm flex flex-col gap-6 border border-zinc-100 select-none animate-in fade-in-0 zoom-in-95 duration-200">
+        
+        <div className="flex flex-col items-center text-center gap-4">
+          <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center text-primary border border-emerald-100">
+            <IconMail className="w-8 h-8" />
           </div>
-
-          <div className="flex flex-col items-center gap-1.5 text-center mt-2">
-            <h1 className="text-[28px] font-bold text-[#052e16] tracking-tight">Verify email</h1>
-            <p className="text-sm text-[#4B5563] font-medium leading-relaxed px-4">
-              Enter the 6-digit verification code sent to <span className="font-semibold text-zinc-800">{email}</span>
+          <div className="flex flex-col gap-1.5">
+            <h2 className="text-2xl font-bold text-zinc-900 tracking-tight">Verify your email</h2>
+            <p className="text-sm text-zinc-500 font-medium px-2 leading-relaxed">
+              Click the link sent to <span className="font-semibold text-zinc-800">{email}</span> to verify your account.
             </p>
           </div>
+        </div>
 
-          <form onSubmit={handleSubmit} className="w-full flex flex-col items-center gap-6 mt-4">
-            <div className="w-full p-3.5 bg-emerald-50 border border-emerald-100 rounded-xl text-center text-xs text-primary font-medium leading-relaxed">
-              For testing, use code: <span className="font-bold underline text-sm tracking-wider">123456</span>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          {error && (
+            <div className="p-3.5 bg-red-50 border border-red-200 rounded-xl text-xs text-red-800 font-semibold animate-fade-in text-center">
+              {error}
             </div>
+          )}
 
-            {error && (
-              <div className="w-full p-4 bg-red-50 border border-red-200 rounded-xl text-sm text-red-800 font-semibold animate-fade-in text-center">
-                {error}
-              </div>
-            )}
+          <PrimaryButton
+            type="submit"
+            disabled={isLoading}
+            isLoading={isLoading}
+          >
+            Verify
+          </PrimaryButton>
+        </form>
 
-            <div className="flex justify-center w-full my-2">
-              <InputOTP
-                maxLength={6}
-                value={code}
-                onChange={setCode}
-                pattern={REGEXP_ONLY_DIGITS}
+        <div className="flex flex-col gap-3 items-center text-xs">
+          <div className="text-zinc-500">
+            Didn't receive the email?{" "}
+            {countdown > 0 ? (
+              <span className="font-semibold text-zinc-400">
+                Resend in {countdown}s
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={handleResend}
+                className="font-bold text-[#EAB308] hover:underline transition-all cursor-pointer"
                 disabled={isLoading}
               >
-                <InputOTPGroup className="gap-2">
-                  <InputOTPSlot index={0} className="w-12 h-12 text-lg font-bold text-[#121212] rounded-xl border border-zinc-200 bg-zinc-50/50" />
-                  <InputOTPSlot index={1} className="w-12 h-12 text-lg font-bold text-[#121212] rounded-xl border border-zinc-200 bg-zinc-50/50" />
-                  <InputOTPSlot index={2} className="w-12 h-12 text-lg font-bold text-[#121212] rounded-xl border border-zinc-200 bg-zinc-50/50" />
-                  <InputOTPSlot index={3} className="w-12 h-12 text-lg font-bold text-[#121212] rounded-xl border border-zinc-200 bg-zinc-50/50" />
-                  <InputOTPSlot index={4} className="w-12 h-12 text-lg font-bold text-[#121212] rounded-xl border border-zinc-200 bg-zinc-50/50" />
-                  <InputOTPSlot index={5} className="w-12 h-12 text-lg font-bold text-[#121212] rounded-xl border border-zinc-200 bg-zinc-50/50" />
-                </InputOTPGroup>
-              </InputOTP>
-            </div>
+                Resend Email
+              </button>
+            )}
+          </div>
 
-            <div className="w-full mt-4">
-              <PrimaryButton
-                type="submit"
-                disabled={code.length !== 6 || isLoading}
-                isLoading={isLoading}
-              >
-                Verify Code
-              </PrimaryButton>
-            </div>
-          </form>
-        </div>
-      </div>
-
-      <div className="text-center text-sm text-[#4B5563] mt-8 mb-4">
-        Didn't receive the code?{" "}
-        {countdown > 0 ? (
-          <span className="font-semibold text-zinc-400">
-            Resend in {countdown}s
-          </span>
-        ) : (
           <button
             type="button"
-            onClick={handleResend}
-            className="font-bold text-[#EAB308] hover:underline transition-all cursor-pointer"
+            onClick={onBack}
+            className="text-zinc-400 hover:text-zinc-600 font-medium mt-1 hover:underline transition-colors"
             disabled={isLoading}
           >
-            Resend Code
+            Back to Sign Up
           </button>
-        )}
+        </div>
+
       </div>
     </div>
   )
