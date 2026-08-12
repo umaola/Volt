@@ -19,6 +19,7 @@ interface CalculatorPageProps {
   onSaveRecharge: (amount: number, units: number) => void
   onEditRecharge?: (id: string, amount: number, units: number) => void
   onDeleteRecharge?: (id: string) => void
+  onBuyUnits?: () => void
   isLoading: boolean
   isSubmitting?: boolean
   recharges: Recharge[]
@@ -31,6 +32,7 @@ export function CalculatorPage({
   onSaveRecharge,
   onEditRecharge,
   onDeleteRecharge,
+  onBuyUnits,
   isLoading,
   isSubmitting = false,
   recharges = [],
@@ -173,19 +175,55 @@ export function CalculatorPage({
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault()
     if (parsedAmount > 0) {
-      onSaveRecharge(parsedAmount, parseFloat(customUnits) || estimatedUnits)
+      const finalAmount = Math.round(parsedAmount)
+      const finalUnits = Number((parseFloat(customUnits) || estimatedUnits).toFixed(2))
+      onSaveRecharge(finalAmount, finalUnits)
       setAmount("")
     }
   }
 
   return (
     <div className="flex-grow flex flex-col bg-zinc-50 relative overflow-hidden h-full">
-      <div className="bg-white px-6 pt-6 pb-4 border-b border-zinc-100">
-        <h1 className="text-lg font-bold text-[#121212]">Units Calculator</h1>
-        <p className="text-xs text-[#4B5563]">Calculate estimated units before purchasing.</p>
+      <div className="bg-white px-6 pt-6 pb-4 border-b border-zinc-100 flex items-center justify-between">
+        <div className="flex flex-col">
+          <h1 className="text-lg font-bold text-[#121212]">Units Calculator</h1>
+          <p className="text-xs text-[#4B5563]">Calculate estimated units before purchasing.</p>
+        </div>
+        {onBuyUnits && (
+          <button
+            type="button"
+            onClick={onBuyUnits}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-[#00BF63] hover:bg-emerald-600 active:scale-95 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer shrink-0"
+          >
+            <IconBolt className="w-3.5 h-3.5 fill-white text-white" />
+            <span>Buy Units</span>
+          </button>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto p-5 pb-8 flex flex-col gap-6">
+        {onBuyUnits && (
+          <div className="bg-emerald-50/60 border border-emerald-100 rounded-2xl p-4 flex items-center justify-between shadow-2xs">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-primary shrink-0">
+                <IconBolt className="w-5 h-5 fill-primary text-primary" />
+              </div>
+              <div className="flex flex-col">
+                <span className="text-xs font-bold text-[#121212]">Instant DISCO Token Purchase</span>
+                <span className="text-[11px] text-[#4B5563]">Vend prepaid electricity tokens instantly</span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={onBuyUnits}
+              className="bg-[#00BF63] hover:bg-emerald-600 active:scale-95 text-white font-bold text-xs px-3.5 py-2 rounded-xl transition-all shadow-xs shrink-0 cursor-pointer flex items-center gap-1.5"
+            >
+              <IconBolt className="w-3.5 h-3.5 fill-white text-white" />
+              <span>Buy Now</span>
+            </button>
+          </div>
+        )}
+
         <form onSubmit={handleSave} className="flex flex-col gap-5">
           <StandardCard className="flex flex-col gap-4">
             <TextField
@@ -242,9 +280,21 @@ export function CalculatorPage({
                 </div>
               </StandardCard>
 
-              <PrimaryButton type="submit" isLoading={isSubmitting}>
-                Log This Recharge
-              </PrimaryButton>
+              <div className="grid grid-cols-2 gap-2">
+                <PrimaryButton type="submit" isLoading={isSubmitting} className="h-11 text-xs font-bold">
+                  Log This Recharge
+                </PrimaryButton>
+                {onBuyUnits && (
+                  <button
+                    type="button"
+                    onClick={onBuyUnits}
+                    className="flex items-center justify-center gap-1.5 h-11 bg-zinc-900 hover:bg-black active:scale-95 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer"
+                  >
+                    <IconBolt className="w-4 h-4 fill-emerald-400 text-emerald-400" />
+                    <span>Buy Electricity</span>
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </form>

@@ -1,14 +1,13 @@
 "use client"
 
 import * as React from "react"
-import { PrimaryButton } from "@/components/design-system/button"
 import { IconMail } from "@tabler/icons-react"
 
 interface OtpPageProps {
   isLoading: boolean
   error?: string | null
   email: string
-  onVerify: () => void
+  onVerify?: () => void
   onResend: () => void
   onBack: () => void
 }
@@ -17,7 +16,6 @@ export function OtpPage({
   isLoading,
   error,
   email,
-  onVerify,
   onResend,
   onBack
 }: OtpPageProps) {
@@ -37,12 +35,6 @@ export function OtpPage({
     }
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!isLoading) {
-      onVerify()
-    }
-  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in">
@@ -60,21 +52,22 @@ export function OtpPage({
           </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <div className="flex flex-col gap-4">
           {error && (
             <div className="p-3.5 bg-red-50 border border-red-200 rounded-xl text-xs text-red-800 font-semibold animate-fade-in text-center">
               {error}
             </div>
           )}
 
-          <PrimaryButton
-            type="submit"
-            disabled={isLoading}
-            isLoading={isLoading}
-          >
-            Verify
-          </PrimaryButton>
-        </form>
+          <div className="flex items-center justify-center gap-2.5 py-3 px-4 bg-emerald-50/80 border border-emerald-200/60 rounded-2xl text-xs font-semibold text-emerald-800">
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+            </span>
+            <span>Waiting for link verification...</span>
+          </div>
+        </div>
+
 
         <div className="flex flex-col gap-3 items-center text-xs">
           <div className="text-zinc-500">

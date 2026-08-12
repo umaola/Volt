@@ -39,6 +39,7 @@ interface DashboardPageProps {
   estimatedSessionMinutes?: number
   currentSessionStart?: string
   onCalibrateManual?: () => void
+  onBuyUnits?: () => void
 }
 
 export function DashboardPage({
@@ -65,7 +66,8 @@ export function DashboardPage({
   monthlyUsage = [],
   estimatedSessionMinutes = 360,
   currentSessionStart,
-  onCalibrateManual
+  onCalibrateManual,
+  onBuyUnits
 }: DashboardPageProps) {
   const [mockDevices, setMockDevices] = React.useState([
     {
@@ -111,28 +113,35 @@ export function DashboardPage({
   }
 
   const mappedDevices = (appliances.length > 0
-    ? appliances.map((app) => {
-        const active = deviceActiveStates[app.name] !== false
-        const wattage = app.wattage ?? app.custom_wattage ?? 0
-        const hours = app.hours ?? app.hours_per_day ?? 0
-        const dailyKwh = (wattage * hours) / 1000
-        return {
-          name: app.name,
-          room: "Appliance",
-          subtitle: `${hours}h daily limit`,
-          value: `${dailyKwh.toFixed(1)} kWh`,
-          active,
-          progress: active ? 100 : 0,
-          wattage
-        }
-      })
-    : mockDevices).slice(0, 3)
+    ? appliances
+        .map((app) => {
+          const active = deviceActiveStates[app.name] !== false
+          const wattage = app.wattage ?? app.custom_wattage ?? 0
+          const hours = app.hours ?? app.hours_per_day ?? 0
+          const dailyKwh = (wattage * hours) / 1000
+          return {
+            name: app.name,
+            room: "Appliance",
+            subtitle: `${hours}h daily limit`,
+            value: `${dailyKwh.toFixed(1)} kWh`,
+            active,
+            progress: active ? 100 : 0,
+            wattage
+          }
+        })
+        .filter((device) => device.active)
+    : mockDevices.filter((d) => d.active)
+  ).slice(0, 3)
 
   const handleToggle = (index: number) => {
-    if (appliances.length > 0) {
-      onToggleDevice(appliances[index].name)
-    } else {
-      handleToggleMockDevice(index)
+    const targetDevice = mappedDevices[index]
+    if (targetDevice) {
+      if (appliances.length > 0) {
+        onToggleDevice(targetDevice.name)
+      } else {
+        const mockIdx = mockDevices.findIndex((d) => d.name === targetDevice.name)
+        if (mockIdx !== -1) handleToggleMockDevice(mockIdx)
+      }
     }
   }
 
@@ -185,6 +194,7 @@ export function DashboardPage({
           expectedSupplyHours={expectedSupplyHours}
           onProfileClick={onProfileClick}
           onCalibrateManual={onCalibrateManual}
+          onBuyUnits={onBuyUnits}
         />
 
       {powerState === "on" && (

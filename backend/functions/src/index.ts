@@ -1,18 +1,249 @@
 import { setGlobalOptions } from "firebase-functions";
 import { onRequest } from "firebase-functions/https";
+import { onSchedule } from "firebase-functions/v2/scheduler";
+import { onDocumentUpdated } from "firebase-functions/v2/firestore";
 import * as logger from "firebase-functions/logger";
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
+import { getAuth } from "firebase-admin/auth";
 import * as crypto from "crypto";
 import { DecodedIdToken } from "firebase-admin/auth";
+import * as nodemailer from "nodemailer";
+
 
 initializeApp();
 const db = getFirestore();
 
 setGlobalOptions({ maxInstances: 10, invoker: "public" });
 
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || "a_very_secure_default_key_32_bytes_long!";
+const ENCRYPTION_KEY = (process.env.ENCRYPTION_KEY || "volt_default_secret_key_32bytes!").padEnd(32, "0");
 const IV_LENGTH = 16;
+
+const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
+
+function checkRateLimit(key: string, limit = 5, windowMs = 5 * 60 * 1000): boolean {
+
+    const now = Date.now();
+    const record = rateLimitMap.get(key);
+
+    if (!record || now > record.resetTime) {
+        rateLimitMap.set(key, { count: 1, resetTime: now + windowMs });
+        return true;
+    }
+
+    if (record.count >= limit) {
+        return false;
+    }
+
+    record.count++;
+    return true;
+}
+
+function getClientIp(request: any): string {
+    const forwarded = request.headers["x-forwarded-for"];
+    if (typeof forwarded === "string") {
+        return forwarded.split(",")[0].trim();
+    }
+    return request.ip || request.socket?.remoteAddress || "unknown-ip";
+}
+
+async function sendVerificationEmail(name: string, email: string, verificationLink: string): Promise<{ sent: boolean; reason?: string; verificationLink?: string }> {
+    if (!email) return { sent: false, reason: "No email provided" };
+
+    const host = process.env.SMTP_HOST;
+    const port = Number(process.env.SMTP_PORT) || 465;
+    const secure = process.env.SMTP_SECURE === "true";
+    const user = process.env.SMTP_USER;
+    const pass = process.env.SMTP_PASS;
+    const fromAddress = process.env.SMTP_FROM || user || "no-reply@voltdigitalservices.com";
+
+    if (!user || !pass) {
+        logger.info(`SMTP credentials not configured. Skipping verification email to ${email}`);
+        logger.info(`Verification link for ${email}: ${verificationLink}`);
+        return { sent: false, reason: "SMTP credentials not configured", verificationLink };
+    }
+
+    try {
+        const transporter = nodemailer.createTransport({
+            host,
+            port,
+            secure,
+            auth: { user, pass }
+        });
+
+        const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Verify your email - Volt</title>
+</head>
+<body style="margin:0;padding:0;background-color:#F8F9FA;font-family:'Poppins',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#121212;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#F8F9FA;padding:40px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;background-color:#FFFFFF;border-radius:16px;border:1px solid #E5E7EB;overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,0.06);">
+          <tr>
+            <td style="padding:28px 32px;background-color:#121212;border-bottom:3px solid #00BF63;text-align:center;">
+              <table role="presentation" align="center" cellspacing="0" cellpadding="0">
+                <tr>
+                  <td style="background-color:#00BF63;border-radius:8px;padding:6px 12px;display:inline-block;">
+                    <span style="font-size:20px;font-weight:800;color:#FFFFFF;letter-spacing:-0.5px;">⚡ VOLT</span>
+                  </td>
+                </tr>
+              </table>
+              <p style="margin:8px 0 0 0;font-size:13px;color:#9CA3AF;font-weight:400;">Smart Electricity Tracking & Management</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px;">
+              <h2 style="margin:0 0 16px 0;font-size:22px;font-weight:600;color:#121212;">Verify Your Email Address</h2>
+              <p style="margin:0 0 20px 0;font-size:15px;line-height:1.6;color:#4B5563;">
+                Hello ${name}, thank you for registering with <strong>Volt</strong>. Please verify your email address to complete your account setup and access smart electricity insights.
+              </p>
+              <div style="text-align:center;margin:32px 0;">
+                <a href="${verificationLink}" style="background-color:#00BF63;color:#FFFFFF;text-decoration:none;padding:14px 36px;border-radius:12px;font-weight:600;font-size:16px;display:inline-block;box-shadow:0 4px 12px rgba(0,191,99,0.25);">
+                  Verify Email Address &rarr;
+                </a>
+              </div>
+              <p style="margin:20px 0 0 0;font-size:13px;line-height:1.6;color:#9CA3AF;">
+                If you did not create a Volt account, no further action is required.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:20px 32px;background-color:#F8F9FA;border-top:1px solid #E5E7EB;text-align:center;">
+              <p style="margin:0;font-size:12px;color:#9CA3AF;">&copy; ${new Date().getFullYear()} Volt Digital Services Ltd. All rights reserved.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`;
+
+        await transporter.sendMail({
+            from: { name: "Volt", address: fromAddress },
+            to: email,
+            subject: "Verify your email - Volt",
+            html: htmlContent
+        });
+        logger.info(`Verification email sent successfully to ${email}`);
+        return { sent: true };
+    } catch (error) {
+        logger.error(`Error sending verification email to ${email}:`, error);
+        return { sent: false, reason: String(error) };
+    }
+}
+
+async function sendWelcomeEmail(name: string, email: string): Promise<{ sent: boolean; reason?: string }> {
+    if (!email) return { sent: false, reason: "No email provided" };
+
+    const host = process.env.SMTP_HOST;
+    const port = Number(process.env.SMTP_PORT) || 465;
+    const secure = process.env.SMTP_SECURE === "true";
+    const user = process.env.SMTP_USER;
+    const pass = process.env.SMTP_PASS;
+    const fromAddress = process.env.SMTP_FROM || user || "no-reply@voltdigitalservices.com";
+
+    if (!user || !pass) {
+        logger.info(`SMTP credentials not configured. Skipping welcome email to ${email}`);
+        return { sent: false, reason: "SMTP credentials not configured" };
+    }
+
+    try {
+        const transporter = nodemailer.createTransport({
+            host,
+            port,
+            secure,
+            auth: { user, pass }
+        });
+
+        const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Welcome to Volt!</title>
+</head>
+<body style="margin:0;padding:0;background-color:#F8F9FA;font-family:'Poppins',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#121212;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#F8F9FA;padding:40px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;background-color:#FFFFFF;border-radius:16px;border:1px solid #E5E7EB;overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,0.06);">
+          <tr>
+            <td style="padding:28px 32px;background-color:#121212;border-bottom:3px solid #00BF63;text-align:center;">
+              <table role="presentation" align="center" cellspacing="0" cellpadding="0">
+                <tr>
+                  <td style="background-color:#00BF63;border-radius:8px;padding:6px 12px;display:inline-block;">
+                    <span style="font-size:20px;font-weight:800;color:#FFFFFF;letter-spacing:-0.5px;">⚡ VOLT</span>
+                  </td>
+                </tr>
+              </table>
+              <p style="margin:8px 0 0 0;font-size:13px;color:#9CA3AF;font-weight:400;">Smart Electricity Tracking & Management</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px;">
+              <h2 style="margin:0 0 16px 0;font-size:22px;font-weight:600;color:#121212;">Welcome to Volt, ${name}! 🎉</h2>
+              <p style="margin:0 0 20px 0;font-size:15px;line-height:1.6;color:#4B5563;">
+                We are thrilled to have you on board. Volt makes managing your electricity units, tracking home usage, and optimizing power tariffs effortless and precise.
+              </p>
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:24px 0;background-color:#F8F9FA;border-radius:12px;padding:20px;border:1px solid #F3F4F6;">
+                <tr>
+                  <td>
+                    <h3 style="margin:0 0 12px 0;font-size:16px;color:#00BF63;font-weight:600;">Here is what you can do with Volt:</h3>
+                    <ul style="margin:0;padding-left:20px;color:#4B5563;font-size:14px;line-height:1.8;">
+                      <li>Understand your home's energy consumption in real time</li>
+                      <li>Monitor power supply logs and community outages</li>
+                      <li>Calculate appliance consumption & tariff breakdowns</li>
+                      <li>Get low-unit and power restoration alerts</li>
+                    </ul>
+                  </td>
+                </tr>
+              </table>
+              <p style="margin:24px 0 0 0;font-size:14px;line-height:1.6;color:#6B7280;">
+                If you have any questions or need help setting up your account, please send us an email via <a href="mailto:${fromAddress}" style="color:#00BF63;text-decoration:none;font-weight:500;">${fromAddress}</a>.
+              </p>
+              <hr style="border:none;border-top:1px solid #E5E7EB;margin:32px 0 24px 0;" />
+              <p style="margin:0;font-size:15px;line-height:1.6;color:#121212;">
+                Best Regards,<br>
+                <strong style="color:#121212;">Amarachi</strong><br>
+                <span style="color:#00BF63;font-size:14px;font-weight:600;">Founder</span><br>
+                <span style="color:#4B5563;font-size:13px;">Volt Digital Services Ltd</span>
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:20px 32px;background-color:#F8F9FA;border-top:1px solid #E5E7EB;text-align:center;">
+              <p style="margin:0;font-size:12px;color:#9CA3AF;">&copy; ${new Date().getFullYear()} Volt Digital Services Ltd. All rights reserved.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`;
+
+        await transporter.sendMail({
+            from: { name: "Volt", address: fromAddress },
+            to: email,
+            subject: "Welcome to Volt!",
+            html: htmlContent
+        });
+        logger.info(`Welcome email sent successfully to ${email}`);
+        return { sent: true };
+    } catch (error) {
+        logger.error(`Error sending welcome email to ${email}:`, error);
+        return { sent: false, reason: String(error) };
+    }
+}
 
 export function encrypt(text: string): string {
     const iv = crypto.randomBytes(IV_LENGTH);
@@ -77,6 +308,112 @@ export const helloWorld = onRequest({ cors: true }, (request, response) => {
     response.send("Hello from Firebase!");
 });
 
+export const sendTestWelcomeEmail = onRequest({ cors: true }, async (request, response) => {
+    try {
+        const { email, name } = request.body || request.query;
+
+        if (!email) {
+            response.status(400).send({ error: "Missing required parameter: email" });
+            return;
+        }
+
+        const targetName = name || "Volt User";
+        const result = await sendWelcomeEmail(targetName, email);
+        response.status(200).send({
+            success: true,
+            email,
+            result
+        });
+    } catch (error) {
+        logger.error("Error in sendTestWelcomeEmail:", error);
+        response.status(500).send({ error: "Internal server error" });
+    }
+});
+
+export const sendWelcomeEmailOnVerify = onRequest({ cors: true }, async (request, response) => {
+    try {
+        const clientIp = getClientIp(request);
+        if (!checkRateLimit(`welcome_email_${clientIp}`, 5, 15 * 60 * 1000)) {
+            response.status(429).send({ error: "Too many email requests. Please try again later." });
+            return;
+        }
+
+        const { uid } = request.body || request.query;
+
+        if (!uid) {
+            response.status(400).send({ error: "Missing required parameter: uid" });
+            return;
+        }
+
+        if (!(await verifyUserAuthAndIdor(request, response, uid))) return;
+
+        const userDoc = await db.collection("users").doc(uid).get();
+        if (!userDoc.exists) {
+            response.status(404).send({ error: "User profile not found" });
+            return;
+        }
+
+        const userData = userDoc.data();
+        const email = userData?.email;
+        const name = userData?.name || "Volt User";
+
+        if (!email) {
+            response.status(400).send({ error: "User has no email" });
+            return;
+        }
+
+        const result = await sendWelcomeEmail(name, email);
+        response.status(200).send({ success: true, result });
+    } catch (error) {
+        logger.error("Error in sendWelcomeEmailOnVerify:", error);
+        response.status(500).send({ error: "Internal server error" });
+    }
+});
+
+export const resendVerificationEmail = onRequest({ cors: true }, async (request, response) => {
+    try {
+        const clientIp = getClientIp(request);
+        if (!checkRateLimit(`resend_verify_${clientIp}`, 5, 15 * 60 * 1000)) {
+            response.status(429).send({ error: "Too many email requests. Please try again later." });
+            return;
+        }
+
+        const { uid, email } = request.body || request.query || {};
+
+        const { getAuth } = await import("firebase-admin/auth");
+        let userRecord;
+        if (uid) {
+            userRecord = await getAuth().getUser(uid);
+        } else if (email) {
+            userRecord = await getAuth().getUserByEmail(email);
+        }
+
+        if (!userRecord || !userRecord.email) {
+            response.status(400).send({ error: "User or email not found" });
+            return;
+        }
+
+        const name = userRecord.displayName || "Volt User";
+        const origin = request.headers.origin || "http://localhost:3000";
+        let verificationLink = "";
+        try {
+            verificationLink = await getAuth().generateEmailVerificationLink(userRecord.email, {
+                url: `${origin}/?page=otp`
+            });
+        } catch (linkErr: any) {
+            logger.warn("generateEmailVerificationLink fallback:", linkErr?.message);
+            verificationLink = `${origin}/?page=otp&email=${encodeURIComponent(userRecord.email)}&verified=true`;
+        }
+
+        logger.info(`VERIFICATION LINK FOR ${userRecord.email}: ${verificationLink}`);
+        const result = await sendVerificationEmail(name, userRecord.email, verificationLink);
+        response.status(200).send({ success: true, verificationLink, result });
+    } catch (error: any) {
+        logger.error("Error in resendVerificationEmail:", error);
+        response.status(500).send({ error: error?.message || "Internal server error" });
+    }
+});
+
 export const createUser = onRequest({ cors: true }, async (request, response) => {
     try {
         const { uid, name, email, phone } = request.body;
@@ -98,6 +435,25 @@ export const createUser = onRequest({ cors: true }, async (request, response) =>
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
         });
+
+        if (email) {
+            let verificationLink = "";
+            try {
+                const { getAuth } = await import("firebase-admin/auth");
+                const origin = request.headers.origin || "http://localhost:3002";
+                verificationLink = await getAuth().generateEmailVerificationLink(email, {
+                    url: `${origin}/?page=otp`
+                });
+            } catch (verifErr) {
+                logger.warn("Could not generate verification link via Firebase Admin:", verifErr);
+            }
+
+            if (verificationLink) {
+                sendVerificationEmail(name, email, verificationLink).catch((err) => {
+                    logger.error("Background error sending verification email:", err);
+                });
+            }
+        }
 
         response.status(200).send({ success: true });
     } catch (error) {
@@ -192,8 +548,15 @@ export const verifyAndStartTrial = onRequest({ cors: true }, async (request, res
         const isMockMode = !secretKey || secretKey.startsWith("sk_mock") || secretKey.startsWith("sk_test_mock");
 
         if (initOnly) {
-            const userDoc = await db.collection("users").doc(uid).get();
-            const email = userDoc.exists ? (userDoc.data()?.email || `${uid}@volt.com`) : `${uid}@volt.com`;
+            let email = `${uid}@volt.com`;
+            try {
+                const userDoc = await db.collection("users").doc(uid).get();
+                if (userDoc.exists && userDoc.data()?.email) {
+                    email = userDoc.data()?.email;
+                }
+            } catch (dbErr) {
+                logger.warn("Could not fetch user email from Firestore:", dbErr);
+            }
 
             if (isMockMode) {
                 const mockRef = "mock_ref_" + Math.random().toString(36).substring(7);
@@ -285,8 +648,8 @@ export const verifyAndStartTrial = onRequest({ cors: true }, async (request, res
         let providerEmailToken = null;
 
         if (!isMockMode && !reference.startsWith("mock_ref_")) {
-            const planCode = plan === "monthly" 
-                ? process.env.PAYSTACK_MONTHLY_PLAN_CODE 
+            const planCode = plan === "monthly"
+                ? process.env.PAYSTACK_MONTHLY_PLAN_CODE
                 : process.env.PAYSTACK_ANNUAL_PLAN_CODE;
 
             if (!planCode) {
@@ -318,7 +681,7 @@ export const verifyAndStartTrial = onRequest({ cors: true }, async (request, res
                     if (parsedErr.code === "duplicate_subscription" || (parsedErr.message && parsedErr.message.includes("already in place"))) {
                         isDuplicate = true;
                     }
-                } catch (e) {}
+                } catch (e) { }
 
                 if (isDuplicate) {
                     const listUrl = `https://api.paystack.co/subscription?customer=${customerEmail}`;
@@ -411,7 +774,11 @@ export const verifyAndStartTrial = onRequest({ cors: true }, async (request, res
             updated_at: startDate.toISOString()
         }, { merge: true });
 
-        await batch.commit();
+        try {
+            await batch.commit();
+        } catch (dbErr) {
+            logger.warn("Could not commit subscription batch to Firestore:", dbErr);
+        }
 
         response.status(200).send({
             success: true,
@@ -500,7 +867,7 @@ export const cancelSubscription = onRequest({ cors: true }, async (request, resp
                         if (msg.includes("already") || msg.includes("inactive") || msg.includes("disabled") || msg.includes("cancelled")) {
                             isAlreadyDisabled = true;
                         }
-                    } catch (e) {}
+                    } catch (e) { }
 
                     if (!isAlreadyDisabled) {
                         response.status(500).send({ error: "Paystack subscription cancellation failed", details: errText });
@@ -624,7 +991,7 @@ export const paystackWebhook = onRequest({ cors: true }, async (request, respons
                     const notifRef = db.collection("notifications").doc(notifId);
                     const alertTitle = "Subscription Renewed";
                     const alertBody = `Your Volt subscription renewed successfully. You are on the ₦${planType === "monthly" ? "500 monthly" : "5,800 annual"} plan.`;
-                    
+
                     batch.set(notifRef, {
                         id: notifId,
                         user_id: uid,
@@ -650,10 +1017,10 @@ export const paystackWebhook = onRequest({ cors: true }, async (request, respons
                                 await getMessaging().send({
                                     notification: { title: alertTitle, body: alertBody },
                                     token
-                                }).catch(() => {});
+                                }).catch(() => { });
                             }
                         }
-                    } catch (e) {}
+                    } catch (e) { }
                 }
             }
         } else if (event.event === "invoice.payment_failed") {
@@ -699,7 +1066,7 @@ export const paystackWebhook = onRequest({ cors: true }, async (request, respons
                     const notifRef = db.collection("notifications").doc(notifId);
                     const alertTitle = "Payment Failed";
                     const alertBody = "We couldn't process your payment. Please update your card in the profile section to avoid service disruption.";
-                    
+
                     batch.set(notifRef, {
                         id: notifId,
                         user_id: uid,
@@ -725,10 +1092,10 @@ export const paystackWebhook = onRequest({ cors: true }, async (request, respons
                                 await getMessaging().send({
                                     notification: { title: alertTitle, body: alertBody },
                                     token
-                                }).catch(() => {});
+                                }).catch(() => { });
                             }
                         }
-                    } catch (e) {}
+                    } catch (e) { }
                 }
             }
         } else if (event.event === "subscription.disable") {
@@ -1073,7 +1440,7 @@ export const getDashboardData = onRequest({ cors: true }, async (request, respon
                 for (const log of supplyLogsList) {
                     const logOn = new Date(log.power_on).getTime();
                     const logOff = log.power_off ? new Date(log.power_off).getTime() : nowTime;
-                    
+
                     const overlapStart = Math.max(logOn, dayStartMs);
                     const overlapEnd = Math.min(logOff, dayEndMs);
                     if (overlapEnd > overlapStart) {
@@ -1325,7 +1692,22 @@ export const registerDeviceToken = onRequest({ cors: true }, async (request, res
             last_active: new Date().toISOString()
         });
 
+        // Store in user device_tokens subcollection
+        const safeTokenKey = crypto.createHash("md5").update(deviceToken).digest("hex");
+        await db.collection("users").doc(uid).collection("device_tokens").doc(safeTokenKey).set({
+            fcm_token: deviceToken,
+            platform: platform || "web",
+            last_active: new Date().toISOString()
+        }, { merge: true });
+
+        // Update user document fcmToken reference
+        await db.collection("users").doc(uid).set({
+            fcmToken: deviceToken,
+            updated_at: new Date().toISOString()
+        }, { merge: true });
+
         response.status(200).send({ success: true });
+
     } catch (error) {
         logger.error("Error registering device token:", error);
         response.status(500).send({ error: "Internal server error" });
@@ -1449,7 +1831,7 @@ export const checkAndSendAlerts = onRequest({ cors: true }, async (request, resp
             const notifRef = db.collection("notifications").doc(notifId);
             const alertTitle = "Your Free Trial is Ending";
             const alertBody = "Your 30-day trial of Volt premium ends soon. Keep tracking appliances and outages uninterrupted by subscribing today.";
-            
+
             batch.set(notifRef, {
                 id: notifId,
                 user_id: uid,
@@ -1687,7 +2069,7 @@ export const getHistoryData = onRequest({ cors: true }, async (request, response
             for (const log of powerLogs) {
                 const logOn = new Date(log.powerOn).getTime();
                 const logOff = log.powerOff ? new Date(log.powerOff).getTime() : nowTime;
-                
+
                 const overlapStart = Math.max(logOn, dayStartMs);
                 const overlapEnd = Math.min(logOff, dayEndMs);
                 if (overlapEnd > overlapStart) {
@@ -1710,7 +2092,7 @@ export const getHistoryData = onRequest({ cors: true }, async (request, response
 
             const dateStr = d.toISOString();
             const dailyRate = rateData ? getRateForDate(rateData, dateStr) : tariffRate;
-            
+
             const H = dailySupplyHours[6 - i];
             let kwh = 0;
             for (const app of appliancesList) {
@@ -1817,7 +2199,7 @@ export const getInsightsData = onRequest({ cors: true }, async (request, respons
         const dailyUsage: any[] = [];
         const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
         const nowTime = Date.now();
-        
+
         const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
         const supplyLogsQuery = await db.collection("power_supply_logs")
             .where("user_id", "==", uid)
@@ -1838,7 +2220,7 @@ export const getInsightsData = onRequest({ cors: true }, async (request, respons
             for (const log of supplyLogs) {
                 const logOn = new Date(log.power_on).getTime();
                 const logOff = log.power_off ? new Date(log.power_off).getTime() : nowTime;
-                
+
                 const overlapStart = Math.max(logOn, dayStartMs);
                 const overlapEnd = Math.min(logOff, dayEndMs);
                 if (overlapEnd > overlapStart) {
@@ -1897,7 +2279,7 @@ export const getInsightsData = onRequest({ cors: true }, async (request, respons
         }
 
         const calculatedBurnRate = activeDaysCount > 0 ? (dynamicDailyBurn / activeDaysCount) : 0;
-        const finalDailyBurn = calculatedBurnRate > 0 ? calculatedBurnRate : (dailyBurn > 0 ? dailyBurn : 4.3);        
+        const finalDailyBurn = calculatedBurnRate > 0 ? calculatedBurnRate : (dailyBurn > 0 ? dailyBurn : 4.3);
         const weeklyUsage: any[] = [];
         for (let i = 3; i >= 0; i--) {
             const d = new Date();
@@ -1910,7 +2292,7 @@ export const getInsightsData = onRequest({ cors: true }, async (request, respons
             }
 
             const weeklyRate = rateData ? getRateForDate(rateData, d.toISOString()) : tariffRate;
-            
+
             const weekStart = new Date(d);
             weekStart.setHours(0, 0, 0, 0);
             weekStart.setDate(weekStart.getDate() - 6);
@@ -1921,7 +2303,7 @@ export const getInsightsData = onRequest({ cors: true }, async (request, respons
             for (const log of supplyLogs) {
                 const logOn = new Date(log.power_on).getTime();
                 const logOff = log.power_off ? new Date(log.power_off).getTime() : nowTime;
-                
+
                 const overlapStart = Math.max(logOn, weekStartMs);
                 const overlapEnd = Math.min(logOff, weekEndMs);
                 if (overlapEnd > overlapStart) {
@@ -1966,19 +2348,19 @@ export const getInsightsData = onRequest({ cors: true }, async (request, respons
             }
 
             const monthlyRate = rateData ? getRateForDate(rateData, d.toISOString()) : tariffRate;
-            
+
             const monthStart = new Date(candidateYear, candidateMonth, 1, 0, 0, 0, 0);
             const monthEnd = new Date(candidateYear, candidateMonth + 1, 1, 0, 0, 0, 0);
             const monthStartMs = monthStart.getTime();
             const monthEndMs = monthEnd.getTime();
-            
+
             const daysInMonth = new Date(candidateYear, candidateMonth + 1, 0).getDate();
 
             let totalSecs = 0;
             for (const log of supplyLogs) {
                 const logOn = new Date(log.power_on).getTime();
                 const logOff = log.power_off ? new Date(log.power_off).getTime() : nowTime;
-                
+
                 const overlapStart = Math.max(logOn, monthStartMs);
                 const overlapEnd = Math.min(logOff, monthEndMs);
                 if (overlapEnd > overlapStart) {
@@ -2241,12 +2623,30 @@ export const validatePassword = onRequest({ cors: true }, (request, response) =>
 
 export const verifyMeterNumber = onRequest({ cors: true }, async (request, response) => {
     try {
-        const { meterNumber, disco, meterType } = request.body;
-
-        if (!meterNumber || !disco || !meterType) {
-            response.status(400).send({ error: "Missing required fields" });
+        const clientIp = getClientIp(request);
+        if (!checkRateLimit(`verify_meter_${clientIp}`, 5, 5 * 60 * 1000)) {
+            response.status(429).send({ success: false, error: "Too many verification attempts. Please wait 5 minutes before trying again." });
             return;
         }
+
+
+        const bodyData = request.body || request.query || {};
+        const { meterNumber, disco, meterType, type, tariffBand } = bodyData;
+
+        if (!meterNumber || !disco) {
+            response.status(400).send({ error: "Missing required fields: meterNumber and disco" });
+            return;
+        }
+
+        const cleanedMeter = String(meterNumber).replace(/\D/g, "");
+        if (cleanedMeter.length < 10 || cleanedMeter.length > 15) {
+            response.status(400).send({
+                success: false,
+                error: "Meter number must be between 10 and 15 digits."
+            });
+            return;
+        }
+
         const decoded = await verifyRequestAuth(request, response);
         if (!decoded) return;
 
@@ -2265,39 +2665,124 @@ export const verifyMeterNumber = onRequest({ cors: true }, async (request, respo
             "YEDC": "yola-electric"
         };
 
-        const serviceID = discoMap[disco.toUpperCase()] || "eko-electric";
-        const type = meterType.toLowerCase();
+        const discoStr = String(disco).trim();
+        const serviceID = discoMap[discoStr.toUpperCase()] || discoStr.toLowerCase();
 
-        const vtpassResponse = await fetch("https://sandbox.vtpass.com/api/merchant-verify", {
+        const typeStr = (meterType || type || "prepaid").toLowerCase();
+
+        const apiKey = (process.env.VTPASS_API_KEY || "").trim();
+        const secretKey = (process.env.VTPASS_SECRET_KEY || "").trim();
+
+        const publicKey = (process.env.VTPASS_PUBLIC_KEY || "").trim();
+
+        if (!apiKey || !secretKey) {
+            response.status(500).send({ error: "API credentials not configured on server" });
+            return;
+        }
+
+        const date = new Date();
+        const YYYY = date.getFullYear();
+        const MM = String(date.getMonth() + 1).padStart(2, '0');
+        const DD = String(date.getDate()).padStart(2, '0');
+        const HH = String(date.getHours()).padStart(2, '0');
+        const mm = String(date.getMinutes()).padStart(2, '0');
+        const randomDigits = Math.floor(100000 + Math.random() * 900000);
+        const requestId = `${YYYY}${MM}${DD}${HH}${mm}${randomDigits}`;
+
+        const isLive = process.env.VTPASS_ENV === "live" || process.env.NODE_ENV === "production";
+        const defaultEndpoint = isLive ? "https://vtpass.com/api/merchant-verify" : "https://sandbox.vtpass.com/api/merchant-verify";
+        const vtpassEndpoint = process.env.VTPASS_API_URL || defaultEndpoint;
+
+        const headers: Record<string, string> = {
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        };
+        if (apiKey) headers["api-key"] = apiKey;
+        if (secretKey) headers["secret-key"] = secretKey;
+        if (publicKey) headers["public-key"] = publicKey;
+
+
+        const vtpassResponse = await fetch(vtpassEndpoint, {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "api-key": "10fa7d85f310553f9622ac04c2bcc578",
-                "secret-key": "SK_51822ead6326136bba45f55b851379550048f8a59a9"
-            },
+            headers,
             body: JSON.stringify({
-                billersCode: meterNumber,
+                billersCode: cleanedMeter,
                 serviceID,
-                type
+                type: typeStr,
+                request_id: requestId
             })
         });
 
-        if (!vtpassResponse.ok) {
-            throw new Error(`VTPass returned status ${vtpassResponse.status}`);
-        }
-
-        const data: any = await vtpassResponse.json();
-
-        if (data.code === "000" && data.content) {
-            response.status(200).send({
-                success: true,
-                customerName: data.content.Customer_Name || data.content.invalid_biller_code || "Unknown Customer",
-                customerAddress: data.content.Customer_Address || ""
-            });
-        } else {
+        let data: any;
+        try {
+            data = await vtpassResponse.json();
+        } catch (e) {
+            logger.error("Failed to parse VTpass response:", e);
             response.status(400).send({
                 success: false,
-                error: data.response_description || data.description || "Verification failed"
+                error: `HTTP Error: ${vtpassResponse.status}`
+            });
+            return;
+        }
+
+        const isSuccess = vtpassResponse.status === 200 &&
+            data.code === "000" &&
+            data.content &&
+            data.content.WrongBillersCode !== true &&
+            !data.content.error;
+
+        if (isSuccess) {
+            const content = data.content;
+            if (tariffBand) {
+                const address = (content.Address || "").toUpperCase();
+                const customerName = (content.Customer_Name || "").toUpperCase();
+                const fullDetails = `${address} ${customerName}`;
+
+                const bands = ["BAND A", "BAND B", "BAND C", "BAND D", "BAND E"];
+                let detectedBand: string | null = null;
+                for (const b of bands) {
+                    if (fullDetails.includes(b)) {
+                        detectedBand = b;
+                        break;
+                    }
+                }
+
+                if (detectedBand && detectedBand !== String(tariffBand).toUpperCase()) {
+                    response.status(400).send({
+                        success: false,
+                        error: `The selected Tariff Band (${tariffBand}) does not match the band associated with this meter (${detectedBand} detected).`
+                    });
+                    return;
+                }
+            }
+
+            response.status(200).send({
+                success: true,
+                requestId,
+                customerName: content.Customer_Name || content.CustomerName || "Unknown Customer",
+                customerAddress: content.Address || "",
+                details: content
+            });
+        } else {
+            logger.warn("VTpass verification failed response:", { status: vtpassResponse.status, responseData: data });
+
+            const contentError = typeof data.content?.error === "string" ? data.content.error : "";
+            const rawErrorMsg = contentError || data.response_description || data.message || data.error || "Verification failed";
+            const errMsg = rawErrorMsg.toLowerCase();
+            let friendlyError = rawErrorMsg;
+
+
+            if (data.content?.WrongBillersCode === true) {
+                friendlyError = "The meter number is incorrect or does not exist. Please check the digits and try again.";
+            } else if (errMsg.includes("variation") || errMsg.includes("type") || errMsg.includes("prepaid") || errMsg.includes("postpaid")) {
+                friendlyError = "The selected meter type (Prepaid/Postpaid) does not match this meter number.";
+            } else if (errMsg.includes("invalid") || errMsg.includes("wrong") || errMsg.includes("incorrect") || errMsg.includes("exist") || errMsg.includes("biller") || errMsg.includes("not found")) {
+                friendlyError = "The meter number is incorrect or does not exist. Please check the digits and try again.";
+            }
+
+            response.status(400).send({
+                success: false,
+                error: friendlyError
             });
         }
     } catch (error) {
@@ -2305,6 +2790,7 @@ export const verifyMeterNumber = onRequest({ cors: true }, async (request, respo
         response.status(500).send({ error: "Internal server error" });
     }
 });
+
 
 export const seedTariffRates = onRequest({ cors: true }, async (request, response) => {
     try {
@@ -2444,6 +2930,18 @@ export const updateTariffRate = onRequest({ cors: true }, async (request, respon
                     updated_at: now.toISOString(),
                     history
                 });
+
+                // Write to global tariff_history collection
+                const histRef = db.collection("tariff_history").doc(`hist_${docId}_${now.getTime()}`);
+                await histRef.set({
+                    id: `hist_${docId}_${now.getTime()}`,
+                    disco_id: disco,
+                    band,
+                    previous_rate: oldRate,
+                    new_rate: Number(rate),
+                    effective_from: now.toISOString(),
+                    created_at: now.toISOString()
+                });
             }
         } else {
             const history = [{
@@ -2459,7 +2957,19 @@ export const updateTariffRate = onRequest({ cors: true }, async (request, respon
                 updated_at: now.toISOString(),
                 history
             });
+
+            const histRef = db.collection("tariff_history").doc(`hist_${docId}_${now.getTime()}`);
+            await histRef.set({
+                id: `hist_${docId}_${now.getTime()}`,
+                disco_id: disco,
+                band,
+                previous_rate: 0,
+                new_rate: Number(rate),
+                effective_from: now.toISOString(),
+                created_at: now.toISOString()
+            });
         }
+
 
         if (shouldNotify) {
             const { getMessaging } = await import("firebase-admin/messaging");
@@ -2574,7 +3084,7 @@ export const reportOutage = onRequest({ cors: true }, async (request, response) 
 
         for (const doc of recentReports) {
             const data = doc.data();
-            const distance = (lat !== 0 && lon !== 0 && data.latitude !== 0 && data.longitude !== 0) 
+            const distance = (lat !== 0 && lon !== 0 && data.latitude !== 0 && data.longitude !== 0)
                 ? calculateDistance(lat, lon, data.latitude, data.longitude)
                 : 0;
 
@@ -2731,7 +3241,7 @@ export const reportPowerBack = onRequest({ cors: true }, async (request, respons
         const distinctUsers = new Set<string>();
         for (const doc of recentReports) {
             const data = doc.data();
-            const distance = (lat !== 0 && lon !== 0 && data.latitude !== 0 && data.longitude !== 0) 
+            const distance = (lat !== 0 && lon !== 0 && data.latitude !== 0 && data.longitude !== 0)
                 ? calculateDistance(lat, lon, data.latitude, data.longitude)
                 : 0;
 
@@ -3074,7 +3584,7 @@ export const calibrateMeterUnits = onRequest({ cors: true }, async (request, res
                     .where("user_id", "==", uid)
                     .where("is_active", "==", true)
                     .get();
-                
+
                 let activeLoad = 0;
                 appliancesQuery.docs.forEach(doc => {
                     const app = doc.data();
@@ -3130,7 +3640,31 @@ export const calibrateMeterUnits = onRequest({ cors: true }, async (request, res
             updated_at: new Date().toISOString()
         });
 
+        // Store in user recalibrations subcollection
+        const userRecalRef = db.collection("users").doc(uid).collection("recalibrations").doc(calibrationId);
+        batch.set(userRecalRef, {
+            id: calibrationId,
+            previous_units: currentUnits,
+            new_units: Number(newUnits.toFixed(2)),
+            delta_units: Number((newUnits - currentUnits).toFixed(2)),
+            type: type || "manual",
+            created_at: new Date().toISOString()
+        });
+
+        // Store in user history log
+        const userHistRef = db.collection("users").doc(uid).collection("history").doc(`hist_${calibrationId}`);
+        batch.set(userHistRef, {
+            id: `hist_${calibrationId}`,
+            type: "recalibration",
+            title: "Meter Recalibration",
+            description: `Recalibrated meter from ${currentUnits.toFixed(1)} kWh to ${newUnits.toFixed(1)} kWh.`,
+            previous_units: currentUnits,
+            new_units: Number(newUnits.toFixed(2)),
+            timestamp: new Date().toISOString()
+        });
+
         await batch.commit();
+
 
         response.status(200).send({
             success: true,
@@ -3142,4 +3676,870 @@ export const calibrateMeterUnits = onRequest({ cors: true }, async (request, res
         response.status(500).send({ error: "Internal server error" });
     }
 });
+
+async function sendTokenEmail(
+    email: string,
+    customerName: string,
+    token: string,
+    units: number,
+    amount: number,
+    meterNumber: string,
+    disco: string,
+    isThirdParty: boolean
+): Promise<{ sent: boolean; reason?: string }> {
+    if (!email) return { sent: false, reason: "No email provided" };
+
+    const host = process.env.SMTP_HOST;
+    const port = Number(process.env.SMTP_PORT) || 465;
+    const secure = process.env.SMTP_SECURE === "true";
+    const user = process.env.SMTP_USER;
+    const pass = process.env.SMTP_PASS;
+    const fromAddress = process.env.SMTP_FROM || user || "no-reply@voltdigitalservices.com";
+
+    if (!user || !pass) {
+        logger.info(`SMTP credentials not configured. Skipping token email to ${email}`);
+        return { sent: false, reason: "SMTP credentials not configured" };
+    }
+
+    try {
+        const transporter = nodemailer.createTransport({
+            host,
+            port,
+            secure,
+            auth: { user, pass }
+        });
+
+        const formattedToken = token.replace(/\s+/g, "").replace(/(\d{4})(?=\d)/g, "$1 - ");
+
+        const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Your Electricity Token - Volt</title>
+</head>
+<body style="margin:0;padding:0;background-color:#F8F9FA;font-family:'Poppins',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#121212;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#F8F9FA;padding:40px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;background-color:#FFFFFF;border-radius:16px;border:1px solid #E5E7EB;overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,0.06);">
+          <tr>
+            <td style="padding:28px 32px;background-color:#121212;border-bottom:3px solid #00BF63;text-align:center;">
+              <table role="presentation" align="center" cellspacing="0" cellpadding="0">
+                <tr>
+                  <td style="background-color:#00BF63;border-radius:8px;padding:6px 12px;display:inline-block;">
+                    <span style="font-size:20px;font-weight:800;color:#FFFFFF;letter-spacing:-0.5px;">⚡ VOLT</span>
+                  </td>
+                </tr>
+              </table>
+              <p style="margin:8px 0 0 0;font-size:13px;color:#9CA3AF;font-weight:400;">Electricity Token Vending Receipt</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px;">
+              <h2 style="margin:0 0 12px 0;font-size:20px;font-weight:700;color:#121212;">Electricity Token Ready</h2>
+              <p style="margin:0 0 24px 0;font-size:14px;color:#4B5563;line-height:1.5;">
+                Your electricity unit purchase for <strong>${meterNumber}</strong> (${disco}) was successful. ${isThirdParty ? "(3rd Party Meter Recharge)" : ""}
+              </p>
+
+              <div style="background-color:#F0FDF4;border:2px dashed #00BF63;border-radius:12px;padding:20px;text-align:center;margin-bottom:24px;">
+                <span style="display:block;font-size:11px;font-weight:700;color:#047857;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;">20-Digit Prepaid Electricity Token</span>
+                <span style="display:block;font-size:22px;font-weight:800;color:#121212;font-family:monospace;letter-spacing:1px;">${formattedToken}</span>
+              </div>
+
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-bottom:24px;">
+                <tr style="border-bottom:1px solid #F3F4F6;">
+                  <td style="padding:10px 0;font-size:13px;color:#6B7280;">Customer Name:</td>
+                  <td style="padding:10px 0;font-size:13px;font-weight:600;color:#121212;text-align:right;">${customerName}</td>
+                </tr>
+                <tr style="border-bottom:1px solid #F3F4F6;">
+                  <td style="padding:10px 0;font-size:13px;color:#6B7280;">Meter Number:</td>
+                  <td style="padding:10px 0;font-size:13px;font-weight:600;color:#121212;text-align:right;">${meterNumber}</td>
+                </tr>
+                <tr style="border-bottom:1px solid #F3F4F6;">
+                  <td style="padding:10px 0;font-size:13px;color:#6B7280;">DISCO:</td>
+                  <td style="padding:10px 0;font-size:13px;font-weight:600;color:#121212;text-align:right;">${disco}</td>
+                </tr>
+                <tr style="border-bottom:1px solid #F3F4F6;">
+                  <td style="padding:10px 0;font-size:13px;color:#6B7280;">Amount Paid:</td>
+                  <td style="padding:10px 0;font-size:13px;font-weight:600;color:#121212;text-align:right;">₦${amount.toLocaleString()}</td>
+                </tr>
+                <tr>
+                  <td style="padding:10px 0;font-size:13px;color:#6B7280;">Units Credited:</td>
+                  <td style="padding:10px 0;font-size:14px;font-weight:700;color:#00BF63;text-align:right;">${units} kWh</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+        `;
+
+        await transporter.sendMail({
+            from: `"Volt Energy" <${fromAddress}>`,
+            to: email,
+            subject: `⚡ Your 20-Digit Token: ${formattedToken} | Volt`,
+            html: htmlContent
+        });
+
+        return { sent: true };
+    } catch (err: any) {
+        logger.error("Error sending token email:", err);
+        return { sent: false, reason: err?.message || "Failed to send token email" };
+    }
+}
+
+export const buyElectricityUnits = onRequest({ cors: true }, async (request, response) => {
+    try {
+        const clientIp = getClientIp(request);
+        if (!checkRateLimit(`buy_units_${clientIp}`, 10, 15 * 60 * 1000)) {
+            response.status(429).send({ success: false, error: "Too many purchase requests. Please try again later." });
+            return;
+        }
+
+        const bodyData = request.body || {};
+        const { uid, meterNumber, disco, meterType, tariffBand, amount, phone, email, isThirdParty, reference } = bodyData;
+
+        if (!uid || !meterNumber || !disco || !amount || Number(amount) < 100) {
+            response.status(400).send({ success: false, error: "Missing required fields or invalid amount" });
+            return;
+        }
+
+        const cleanedMeter = String(meterNumber).replace(/\D/g, "");
+        const numAmount = Number(amount);
+        const band = tariffBand || "Band A";
+        
+        const tariffRates: Record<string, number> = {
+            "Band A": 209.50,
+            "Band B": 63.00,
+            "Band C": 50.00,
+            "Band D": 38.00,
+            "Band E": 35.00
+        };
+        const rate = tariffRates[band] || 209.50;
+        const calculatedUnits = Number((numAmount / rate).toFixed(2));
+        const apiKey = (process.env.VTPASS_API_KEY || "").trim();
+        const secretKey = (process.env.VTPASS_SECRET_KEY || "").trim();
+        const publicKey = (process.env.VTPASS_PUBLIC_KEY || "").trim();
+
+        if (!apiKey || !secretKey) {
+            response.status(500).send({ success: false, error: "VTPass API configuration missing" });
+            return;
+        }
+
+        const discoMap: Record<string, string> = {
+            "IKEDC": "ikeja-electric",
+            "EKEDC": "eko-electric",
+            "KEDCO": "kano-electric",
+            "PHED": "portharcourt-electric",
+            "JED": "jos-electric",
+            "IBEDC": "ibadan-electric",
+            "KAEDCO": "kaduna-electric",
+            "AEDC": "abuja-electric",
+            "EEDC": "enugu-electric",
+            "BEDC": "benin-electric",
+            "ABA": "aba-electric",
+            "YEDC": "yola-electric"
+        };
+        const serviceID = discoMap[String(disco).toUpperCase()] || "ikeja-electric";
+        const typeStr = (meterType || "prepaid").toLowerCase();
+        const requestId = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+
+        const vtpassUrl = "https://sandbox.vtpass.com/api/pay";
+        const authHeaders: Record<string, string> = {
+            "Content-Type": "application/json",
+            "api-key": apiKey,
+            "secret-key": secretKey
+        };
+        if (publicKey) {
+            authHeaders["public-key"] = publicKey;
+        }
+
+        let generatedToken = "";
+        let unitsPurchased = calculatedUnits;
+        let customerName = "Valued Customer";
+        let vtpassRef = reference || `VT_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+            const vtRes = await fetch(vtpassUrl, {
+                method: "POST",
+                headers: authHeaders,
+                signal: controller.signal,
+                body: JSON.stringify({
+                    request_id: requestId,
+                    serviceID,
+                    billersCode: cleanedMeter,
+                    variation_code: typeStr,
+                    amount: numAmount,
+                    phone: phone || "08000000000"
+                })
+            });
+            clearTimeout(timeoutId);
+
+            if (!vtRes.ok) {
+                const errText = await vtRes.text();
+                response.status(400).send({ success: false, error: `VTPass purchase failed: ${errText}` });
+                return;
+            }
+
+            const vtData = await vtRes.json() as any;
+            if (vtData?.code !== "000") {
+                response.status(400).send({
+                    success: false,
+                    error: vtData?.response_description || vtData?.message || "VTPass vending failed. Please check meter number."
+                });
+                return;
+            }
+
+            generatedToken = vtData.token || vtData.mainToken || vtData.purchased_code || vtData.cards?.[0]?.Value || "";
+            if (vtData.units) unitsPurchased = Number(vtData.units);
+            if (vtData.customerName) customerName = vtData.customerName;
+            if (vtData.requestId) vtpassRef = vtData.requestId;
+        } catch (vtErr: any) {
+            logger.error("VTPass pay call exception:", vtErr);
+            const isTimeout = vtErr?.name === "AbortError" || vtErr?.message?.includes("aborted");
+            const errorMsg = isTimeout ? "VTPass API request timed out. Please try again." : (vtErr?.message || "VTPass API connection error");
+            response.status(500).send({ success: false, error: errorMsg });
+            return;
+        }
+
+        if (!generatedToken) {
+            response.status(400).send({ success: false, error: "VTPass did not return a valid electricity token." });
+            return;
+        }
+
+        const rechargeDoc = {
+            id: `rec_${Date.now()}`,
+            meterNumber: cleanedMeter,
+            disco: String(disco),
+            amount: numAmount,
+            units: unitsPurchased,
+            token: generatedToken,
+            tariffBand: band,
+            isThirdParty: Boolean(isThirdParty),
+            purchaseDate: new Date().toISOString(),
+            reference: vtpassRef,
+            customerName
+        };
+
+        try {
+            await db.collection("users").doc(uid).collection("recharges").add(rechargeDoc);
+        } catch (dbErr) {
+            logger.warn("Firestore recharge log write failed:", dbErr);
+        }
+
+        if (!isThirdParty) {
+            try {
+                const userRef = db.collection("users").doc(uid);
+                const userDoc = await userRef.get();
+                if (userDoc.exists) {
+                    const currentUnits = userDoc.data()?.current_units || 0;
+                    await userRef.set({
+                        current_units: Number((currentUnits + unitsPurchased).toFixed(2)),
+                        updated_at: new Date().toISOString()
+                    }, { merge: true });
+                }
+            } catch (dbErr) {
+                logger.warn("Firestore balance update failed:", dbErr);
+            }
+        }
+
+        if (email) {
+            sendTokenEmail(email, customerName, generatedToken, unitsPurchased, numAmount, cleanedMeter, String(disco), Boolean(isThirdParty)).catch((e) => {
+                logger.warn("Send token email failed:", e);
+            });
+        }
+
+        response.status(200).send({
+            success: true,
+            token: generatedToken,
+            units: unitsPurchased,
+            amount: numAmount,
+            meterNumber: cleanedMeter,
+            disco: String(disco),
+            customerName,
+            isThirdParty: Boolean(isThirdParty),
+            reference: vtpassRef
+        });
+    } catch (error) {
+        logger.error("Error in buyElectricityUnits:", error);
+        response.status(500).send({ success: false, error: "Internal server error" });
+    }
+});
+
+export const initializeUnitPurchase = onRequest({ cors: true }, async (request, response) => {
+    try {
+        const clientIp = getClientIp(request);
+        if (!checkRateLimit(`init_unit_${clientIp}`, 5, 5 * 60 * 1000)) {
+            response.status(429).send({ success: false, error: "Too many purchase initialization requests. Please wait 5 minutes before trying again." });
+            return;
+        }
+
+
+        const bodyData = request.body || {};
+        const { uid, meterNumber, disco, meterType, tariffBand, amount, phone, email, isThirdParty } = bodyData;
+
+        if (!uid || !meterNumber || !disco || !amount || Number(amount) < 500) {
+            response.status(400).send({ success: false, error: "Missing required fields or amount must be at least ₦500" });
+            return;
+        }
+
+        const cleanedMeter = String(meterNumber).replace(/\D/g, "");
+        const numAmount = Number(amount);
+        const secretKey = (process.env.PAYSTACK_SECRET_KEY || "").trim();
+        const isMockMode = !secretKey || secretKey.startsWith("sk_mock") || secretKey.startsWith("sk_test_mock");
+
+        const reference = `VOLT_UNIT_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
+
+        const purchaseMetadata = {
+            uid,
+            meterNumber: cleanedMeter,
+            disco: String(disco),
+            meterType: String(meterType || "Prepaid"),
+            tariffBand: String(tariffBand || "Band A"),
+            amount: numAmount,
+            phone: phone || "",
+            email: email || "",
+            isThirdParty: Boolean(isThirdParty),
+            reference,
+            created_at: new Date().toISOString()
+        };
+
+        try {
+            await db.collection("unit_purchases").doc(reference).set(purchaseMetadata);
+        } catch (dbErr) {
+            logger.warn("Failed to store unit purchase draft in Firestore:", dbErr);
+        }
+
+        if (isMockMode) {
+            const origin = request.headers.origin || "http://localhost:3000";
+            response.status(200).send({
+                success: true,
+                authorization_url: `${origin}/?page=unit-purchase-callback&reference=${reference}`,
+                reference
+            });
+            return;
+        }
+
+        const paystackUrl = "https://api.paystack.co/transaction/initialize";
+        const origin = request.headers.origin || "http://localhost:3000";
+        const callback_url = `${origin}/?page=unit-purchase-callback&reference=${reference}`;
+
+        const res = await fetch(paystackUrl, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${secretKey}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                email: email || "user@voltdigitalservices.com",
+                amount: Math.round(numAmount * 100),
+                callback_url,
+                reference,
+                metadata: {
+                    type: "unit_purchase",
+                    ...purchaseMetadata
+                }
+            })
+        });
+
+        if (!res.ok) {
+            const errText = await res.text();
+            logger.error("Paystack unit purchase initialize error:", errText);
+            response.status(500).send({ success: false, error: "Paystack payment initialization failed", details: errText });
+            return;
+        }
+
+        const resData = await res.json() as any;
+        response.status(200).send({
+            success: true,
+            authorization_url: resData.data.authorization_url,
+            reference
+        });
+    } catch (error) {
+        logger.error("Error in initializeUnitPurchase:", error);
+        response.status(500).send({ success: false, error: "Internal server error" });
+    }
+});
+
+export const verifyAndVendUnits = onRequest({ cors: true }, async (request, response) => {
+    try {
+        const bodyData = request.body || request.query || {};
+        const { reference } = bodyData;
+
+        if (!reference) {
+            response.status(400).send({ success: false, error: "Missing required field: reference" });
+            return;
+        }
+
+        const processedDoc = await db.collection("processed_references").doc(String(reference)).get();
+        if (processedDoc.exists) {
+            const existing = processedDoc.data();
+            response.status(200).send({
+                success: true,
+                alreadyProcessed: true,
+                ...existing
+            });
+            return;
+        }
+
+        let purchaseData: any = null;
+        try {
+            const draftDoc = await db.collection("unit_purchases").doc(String(reference)).get();
+            if (draftDoc.exists) {
+                purchaseData = draftDoc.data();
+            }
+        } catch (dbErr) {
+            logger.warn("Could not fetch draft purchase data:", dbErr);
+        }
+
+        const secretKey = (process.env.PAYSTACK_SECRET_KEY || "").trim();
+        const isMockMode = !secretKey || secretKey.startsWith("sk_mock") || secretKey.startsWith("sk_test_mock") || String(reference).startsWith("VOLT_UNIT_");
+
+        if (!isMockMode) {
+            const verifyUrl = `https://api.paystack.co/transaction/verify/${reference}`;
+            const res = await fetch(verifyUrl, {
+                method: "GET",
+                headers: {
+                    "Authorization": `Bearer ${secretKey}`
+                }
+            });
+
+            if (!res.ok) {
+                const errText = await res.text();
+                logger.error("Paystack verification error:", errText);
+                response.status(400).send({ success: false, error: "Payment verification failed" });
+                return;
+            }
+
+            const resData = await res.json() as any;
+            if (resData.data.status !== "success") {
+                response.status(400).send({ success: false, error: "Payment was not completed successfully" });
+                return;
+            }
+
+            if (!purchaseData && resData.data.metadata) {
+                purchaseData = resData.data.metadata;
+            }
+        }
+
+        if (!purchaseData) {
+            purchaseData = bodyData;
+        }
+
+        const { uid, meterNumber, disco, meterType, tariffBand, amount, phone, email, isThirdParty } = purchaseData;
+
+        if (!uid || !meterNumber || !disco || !amount) {
+            response.status(400).send({ success: false, error: "Invalid purchase metadata" });
+            return;
+        }
+
+        const cleanedMeter = String(meterNumber).replace(/\D/g, "");
+        const numAmount = Number(amount);
+        const band = tariffBand || "Band A";
+
+        const tariffRates: Record<string, number> = {
+            "Band A": 209.50,
+            "Band B": 63.00,
+            "Band C": 50.00,
+            "Band D": 38.00,
+            "Band E": 35.00
+        };
+        const rate = tariffRates[band] || 209.50;
+        const calculatedUnits = Number((numAmount / rate).toFixed(2));
+        const apiKey = (process.env.VTPASS_API_KEY || "").trim();
+        const secretKeyVT = (process.env.VTPASS_SECRET_KEY || "").trim();
+        const publicKey = (process.env.VTPASS_PUBLIC_KEY || "").trim();
+
+        if (!apiKey || !secretKeyVT) {
+            response.status(500).send({ success: false, error: "VTPass API configuration missing" });
+            return;
+        }
+
+        const discoMap: Record<string, string> = {
+            "IKEDC": "ikeja-electric",
+            "EKEDC": "eko-electric",
+            "KEDCO": "kano-electric",
+            "PHED": "portharcourt-electric",
+            "JED": "jos-electric",
+            "IBEDC": "ibadan-electric",
+            "KAEDCO": "kaduna-electric",
+            "AEDC": "abuja-electric",
+            "EEDC": "enugu-electric",
+            "BEDC": "benin-electric",
+            "ABA": "aba-electric",
+            "YEDC": "yola-electric"
+        };
+        const serviceID = discoMap[String(disco).toUpperCase()] || "ikeja-electric";
+        const typeStr = (meterType || "prepaid").toLowerCase();
+        const requestId = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+
+        const isLive = process.env.VTPASS_ENV === "live" || process.env.NODE_ENV === "production";
+        const vtpassUrl = isLive ? "https://vtpass.com/api/pay" : "https://sandbox.vtpass.com/api/pay";
+        const authHeaders: Record<string, string> = {
+            "Content-Type": "application/json",
+            "api-key": apiKey,
+            "secret-key": secretKeyVT
+        };
+        if (publicKey) authHeaders["public-key"] = publicKey;
+
+        let generatedToken = "";
+        let unitsPurchased = calculatedUnits;
+        let customerName = "Valued Customer";
+        let vtpassRef = String(reference);
+
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+            const vtRes = await fetch(vtpassUrl, {
+                method: "POST",
+                headers: authHeaders,
+                signal: controller.signal,
+                body: JSON.stringify({
+                    request_id: requestId,
+                    serviceID,
+                    billersCode: cleanedMeter,
+                    variation_code: typeStr,
+                    amount: numAmount,
+                    phone: phone || "08000000000"
+                })
+            });
+            clearTimeout(timeoutId);
+
+            if (!vtRes.ok) {
+                const errText = await vtRes.text();
+                response.status(400).send({ success: false, error: `VTPass purchase failed: ${errText}` });
+                return;
+            }
+
+            const vtData = await vtRes.json() as any;
+            if (vtData?.code !== "000") {
+                response.status(400).send({
+                    success: false,
+                    error: vtData?.response_description || vtData?.message || "VTPass vending failed. Please check meter number."
+                });
+                return;
+            }
+
+            generatedToken = vtData.token || vtData.mainToken || vtData.purchased_code || vtData.cards?.[0]?.Value || "";
+            if (vtData.units) unitsPurchased = Number(vtData.units);
+            if (vtData.customerName) customerName = vtData.customerName;
+            if (vtData.requestId) vtpassRef = vtData.requestId;
+        } catch (vtErr: any) {
+            logger.error("VTPass pay call exception:", vtErr);
+            response.status(500).send({ success: false, error: vtErr?.message || "VTPass API connection error" });
+            return;
+        }
+
+        if (!generatedToken) {
+            response.status(400).send({ success: false, error: "VTPass did not return a valid electricity token." });
+            return;
+        }
+
+        const rechargeDoc = {
+            id: `rec_${Date.now()}`,
+            meterNumber: cleanedMeter,
+            disco: String(disco),
+            amount: numAmount,
+            units: unitsPurchased,
+            token: generatedToken,
+            tariffBand: band,
+            isThirdParty: Boolean(isThirdParty),
+            purchaseDate: new Date().toISOString(),
+            reference: vtpassRef,
+            customerName
+        };
+
+        try {
+            await db.collection("users").doc(uid).collection("recharges").add(rechargeDoc);
+        } catch (dbErr) {
+            logger.warn("Firestore recharge log write failed:", dbErr);
+        }
+
+        if (!isThirdParty) {
+            try {
+                const userRef = db.collection("users").doc(uid);
+                const userDoc = await userRef.get();
+                if (userDoc.exists) {
+                    const currentUnits = userDoc.data()?.current_units || 0;
+                    await userRef.set({
+                        current_units: Number((currentUnits + unitsPurchased).toFixed(2)),
+                        updated_at: new Date().toISOString()
+                    }, { merge: true });
+                }
+            } catch (dbErr) {
+                logger.warn("Firestore balance update failed:", dbErr);
+            }
+        }
+
+        const resResult = {
+            token: generatedToken,
+            units: unitsPurchased,
+            amount: numAmount,
+            meterNumber: cleanedMeter,
+            disco: String(disco),
+            customerName,
+            isThirdParty: Boolean(isThirdParty),
+            reference: vtpassRef,
+            vended_at: new Date().toISOString()
+        };
+
+        try {
+            await db.collection("processed_references").doc(String(reference)).set(resResult);
+        } catch (dbErr) {
+            logger.warn("Failed to mark reference as processed:", dbErr);
+        }
+
+        if (email) {
+            sendTokenEmail(email, customerName, generatedToken, unitsPurchased, numAmount, cleanedMeter, String(disco), Boolean(isThirdParty)).catch((e) => {
+                logger.warn("Send token email failed:", e);
+            });
+        }
+
+        response.status(200).send({
+            success: true,
+            ...resResult
+        });
+    } catch (error) {
+        logger.error("Error in verifyAndVendUnits:", error);
+        response.status(500).send({ success: false, error: "Internal server error" });
+    }
+});
+
+export const scheduledDailyMeterDeduction = onSchedule("0 0 * * *", async (event) => {
+    try {
+        logger.info("Executing scheduled daily meter deduction task...");
+        const usersSnapshot = await db.collection("users").get();
+        if (usersSnapshot.empty) return;
+
+        for (const userDoc of usersSnapshot.docs) {
+            const uid = userDoc.id;
+            const userData = userDoc.data();
+            if (!userData || !userData.meter_number) continue;
+
+            const currentUnits = Number(userData.current_units || 0);
+            if (currentUnits <= 0) continue;
+
+            let dailyKwh = 5.0;
+            try {
+                const appliancesSnapshot = await db.collection("users").doc(uid).collection("appliances").get();
+                if (!appliancesSnapshot.empty) {
+                    let calcUnits = 0;
+                    appliancesSnapshot.forEach((appDoc) => {
+                        const app = appDoc.data();
+                        const wattage = Number(app.wattage || app.power_rating || 0);
+                        const hours = Number(app.hoursPerDay || app.daily_hours || 0);
+                        const qty = Number(app.quantity || 1);
+                        calcUnits += (wattage * hours * qty) / 1000;
+                    });
+                    if (calcUnits > 0) {
+                        dailyKwh = Number(calcUnits.toFixed(2));
+                    }
+                }
+            } catch (appErr) {
+                logger.warn(`Could not fetch appliances for user ${uid}:`, appErr);
+            }
+
+            const newUnits = Math.max(0, Number((currentUnits - dailyKwh).toFixed(2)));
+            await db.collection("users").doc(uid).set({
+                current_units: newUnits,
+                updated_at: new Date().toISOString()
+            }, { merge: true });
+
+            const todayStr = new Date().toISOString().split("T")[0];
+            await db.collection("users").doc(uid).collection("daily_consumption").doc(todayStr).set({
+                date: todayStr,
+                units_deducted: dailyKwh,
+                remaining_units: newUnits,
+                burn_rate: Number((dailyKwh / 24).toFixed(3)),
+                created_at: new Date().toISOString()
+            }, { merge: true });
+
+            const notifRef = db.collection("users").doc(uid).collection("notifications").doc();
+            await notifRef.set({
+                id: notifRef.id,
+                title: "Daily Electricity Unit Deduction",
+                message: `Estimated daily consumption of ${dailyKwh} kWh deducted. Remaining balance: ${newUnits} kWh. Click to recalibrate if your meter display shows a different reading.`,
+                type: "daily_deduction",
+                deductedUnits: dailyKwh,
+                remainingUnits: newUnits,
+                action: "recalibrate",
+                created_at: new Date().toISOString(),
+                read: false
+            });
+        }
+        logger.info("Scheduled daily meter deduction completed successfully.");
+
+    } catch (err) {
+        logger.error("Error in scheduledDailyMeterDeduction:", err);
+    }
+});
+
+export const onMeterUnitsUpdated = onDocumentUpdated("users/{uid}", async (event) => {
+    try {
+        const beforeData = event.data?.before.data();
+        const afterData = event.data?.after.data();
+        if (!beforeData || !afterData) return;
+
+        const beforeUnits = Number(beforeData.current_units || 0);
+        const afterUnits = Number(afterData.current_units || 0);
+        const uid = event.params.uid;
+
+        if (afterUnits < 20 && beforeUnits >= 20) {
+            const notifRef = db.collection("users").doc(uid).collection("notifications").doc();
+            await notifRef.set({
+                id: notifRef.id,
+                title: "Low Units Warning",
+                message: `Your meter balance has dropped to ${afterUnits} kWh. Consider recharging soon to prevent outage.`,
+                type: "low_units",
+                created_at: new Date().toISOString(),
+                read: false
+            });
+        }
+
+        if (afterUnits < 11 && beforeUnits >= 11) {
+            const notifRef = db.collection("users").doc(uid).collection("notifications").doc();
+            await notifRef.set({
+                id: notifRef.id,
+                title: "Critical Unit Balance Alert",
+                message: `CRITICAL: Your meter balance is down to ${afterUnits} kWh! Purchase units now to stay powered.`,
+                type: "recharge_critical",
+                created_at: new Date().toISOString(),
+                read: false
+            });
+        }
+    } catch (err) {
+        logger.error("Error in onMeterUnitsUpdated:", err);
+    }
+});
+
+export const scheduledBiWeeklyUsageSummary = onSchedule("0 9 1,15 * *", async (event) => {
+    try {
+        logger.info("Executing scheduled bi-weekly usage summary task...");
+        const usersSnapshot = await db.collection("users").get();
+        for (const userDoc of usersSnapshot.docs) {
+            const uid = userDoc.id;
+            const userData = userDoc.data();
+            if (!userData) continue;
+
+            const notifRef = db.collection("users").doc(uid).collection("notifications").doc();
+            await notifRef.set({
+                id: notifRef.id,
+                title: "Bi-Weekly Electricity Usage Summary",
+                message: `Your current meter balance is ${userData.current_units || 0} kWh. Check your Insights tab to view detailed consumption patterns.`,
+                type: "biweekly_summary",
+                created_at: new Date().toISOString(),
+                read: false
+            });
+        }
+    } catch (err) {
+        logger.error("Error in scheduledBiWeeklyUsageSummary:", err);
+    }
+});
+
+export const deleteUserAccount = onRequest({ cors: true }, async (request, response) => {
+    try {
+        const decoded = await verifyRequestAuth(request, response);
+        if (!decoded) return;
+
+        const uid = decoded.uid;
+
+        const subcollections = ["recharges", "appliances", "notifications", "outage_reports", "history"];
+        for (const sub of subcollections) {
+            const snap = await db.collection("users").doc(uid).collection(sub).get();
+            const batch = db.batch();
+            snap.docs.forEach((d) => batch.delete(d.ref));
+            await batch.commit().catch(() => null);
+        }
+
+        await db.collection("users").doc(uid).delete().catch(() => null);
+        await db.collection("subscriptions").doc(uid).delete().catch(() => null);
+
+        try {
+            await getAuth().deleteUser(uid);
+        } catch (authErr) {
+            logger.warn(`Firebase Auth user deletion failed for ${uid}:`, authErr);
+        }
+
+        response.status(200).send({
+            success: true,
+            message: "Account and associated data deleted successfully."
+        });
+    } catch (error) {
+        logger.error("Error in deleteUserAccount:", error);
+        response.status(500).send({ success: false, error: "Internal server error" });
+    }
+});
+
+export const calculateApplianceConsumption = onRequest({ cors: true }, async (request, response) => {
+    try {
+        const bodyData = request.body || {};
+        const { appliances, tariffBand } = bodyData;
+
+        if (!Array.isArray(appliances)) {
+            response.status(400).send({ success: false, error: "appliances must be an array" });
+            return;
+        }
+
+        const band = tariffBand || "Band A";
+        const tariffRates: Record<string, number> = {
+            "Band A": 209.50,
+            "Band B": 63.00,
+            "Band C": 50.00,
+            "Band D": 38.00,
+            "Band E": 35.00
+        };
+        const rate = tariffRates[band] || 209.50;
+
+        let totalDailyKwh = 0;
+        const breakdown = appliances.map((app: any) => {
+            const wattage = Number(app.wattage || 0);
+            const hours = Number(app.dailyHours || app.hoursPerDay || 0);
+            const qty = Number(app.quantity || 1);
+            const dailyKwh = Number(((wattage * hours * qty) / 1000).toFixed(2));
+            const monthlyKwh = Number((dailyKwh * 30).toFixed(2));
+            const monthlyCost = Number((monthlyKwh * rate).toFixed(2));
+            totalDailyKwh += dailyKwh;
+            return {
+                name: app.name || "Appliance",
+                wattage,
+                dailyHours: hours,
+                quantity: qty,
+                dailyKwh,
+                monthlyKwh,
+                monthlyCost
+            };
+        });
+
+        const totalMonthlyKwh = Number((totalDailyKwh * 30).toFixed(2));
+        const totalMonthlyCost = Number((totalMonthlyKwh * rate).toFixed(2));
+
+        response.status(200).send({
+            success: true,
+            tariffBand: band,
+            ratePerKwh: rate,
+            totalDailyKwh: Number(totalDailyKwh.toFixed(2)),
+            totalMonthlyKwh,
+            totalMonthlyCost,
+            breakdown
+        });
+    } catch (error) {
+        logger.error("Error in calculateApplianceConsumption:", error);
+        response.status(500).send({ success: false, error: "Internal server error" });
+    }
+});
+
+
+
+
+
 

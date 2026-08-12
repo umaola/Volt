@@ -148,6 +148,16 @@ export function DevicesPage({
     return sum + (isActive ? (app.wattage * app.hours) : 0)
   }, 0) / 1000
 
+  const sortedAppliances = React.useMemo(() => {
+    return [...appliances].sort((a, b) => {
+      const aActive = deviceActiveStates[a.name] !== false
+      const bActive = deviceActiveStates[b.name] !== false
+      if (aActive && !bActive) return -1
+      if (!aActive && bActive) return 1
+      return a.name.localeCompare(b.name)
+    })
+  }, [appliances, deviceActiveStates])
+
   if (isLoading) {
     return (
       <div className="flex-1 flex flex-col bg-zinc-50 overflow-y-auto">
@@ -294,7 +304,7 @@ export function DevicesPage({
               <span className="text-[10px] text-[#9CA3AF]">Click the + button to add your first device.</span>
             </div>
           ) : (
-            appliances.map((app) => {
+            sortedAppliances.map((app) => {
               const isEditing = editingName === app.name
               const isActive = deviceActiveStates[app.name] !== false
 

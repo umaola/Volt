@@ -17,11 +17,41 @@ import { DevicesPage } from "@/components/pages/devices-page"
 import { SurgeChecklistPage } from "@/components/pages/surge-checklist-page"
 import { TermsPage } from "@/components/pages/terms-page"
 import { PrivacyPage } from "@/components/pages/privacy-page"
+import { PurchaseUnitsModal } from "@/components/pages/purchase-units"
 import { BottomNavigation, TabType } from "@/components/design-system/bottom-navigation"
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail, onAuthStateChanged, signOut, sendEmailVerification } from "firebase/auth"
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail, onAuthStateChanged, signOut, sendEmailVerification, applyActionCode } from "firebase/auth"
 import { auth, getFcmToken, onMessageListener } from "@/lib/firebase"
 import { toast } from "sonner"
 
+
+
+const SESSION_TIMEOUT_MS = 15 * 60 * 1000
+
+const updateSessionTimestamp = () => {
+  if (typeof window !== "undefined") {
+    localStorage.setItem("volt_session_timestamp", String(Date.now()))
+  }
+}
+
+const clearUserSession = () => {
+  if (typeof window !== "undefined") {
+    localStorage.removeItem("volt_user")
+    localStorage.removeItem("volt_appliances")
+    localStorage.removeItem("volt_power_logs")
+    localStorage.removeItem("volt_recharges")
+    localStorage.removeItem("volt_session_timestamp")
+  }
+  signOut(auth).catch(() => {})
+}
+
+const isSessionValid = (): boolean => {
+  if (typeof window === "undefined") return false
+  const timestamp = localStorage.getItem("volt_session_timestamp")
+  if (!timestamp) return false
+  const time = Number(timestamp)
+  if (isNaN(time)) return false
+  return Date.now() - time < SESSION_TIMEOUT_MS
+}
 
 function PageContent() {
   const router = useRouter()
@@ -53,7 +83,61 @@ function PageContent() {
   } | null>(null)
 
   const [isLoading, setIsLoading] = React.useState(false)
+  const [isPurchaseUnitsOpen, setIsPurchaseUnitsOpen] = React.useState(false)
   const [deviceActiveStates, setDeviceActiveStates] = React.useState<Record<string, boolean>>({})
+
+  const handlePurchaseUnitsSuccess = (purchaseData: {
+    token: string
+    units: number
+    amount: number
+    meterNumber: string
+    disco: string
+    customerName: string
+    isThirdParty: boolean
+  }) => {
+    const newRecharge = {
+      id: "pay_" + Date.now(),
+      amount: purchaseData.amount,
+      units: purchaseData.units,
+      date: new Date().toISOString(),
+      source: purchaseData.isThirdParty ? "3rd Party" : "Paystack Vending"
+    }
+
+    if (typeof window !== "undefined") {
+      const cachedRecharges = localStorage.getItem("volt_recharges")
+      const recharges = cachedRecharges ? JSON.parse(cachedRecharges) : []
+      recharges.unshift(newRecharge)
+      localStorage.setItem("volt_recharges", JSON.stringify(recharges))
+    }
+
+    setHistoryData((prev: any) => ({
+      ...prev,
+      recharges: [newRecharge, ...(prev?.recharges || [])]
+    }))
+
+    if (!purchaseData.isThirdParty) {
+      setUser((prevUser: any) => {
+        const current = prevUser?.currentUnits ?? dashboardData?.remainingUnits ?? 0
+        const newUnits = Number((current + purchaseData.units).toFixed(2))
+        const updated = { ...(prevUser || {}), currentUnits: newUnits }
+        if (typeof window !== "undefined") {
+          localStorage.setItem("volt_user", JSON.stringify(updated))
+        }
+        return updated
+      })
+
+      setDashboardData((prev: any) => {
+        if (!prev) return prev
+        return {
+          ...prev,
+          remainingUnits: Number(((prev.remainingUnits || 0) + purchaseData.units).toFixed(2))
+        }
+      })
+    }
+
+    fetchHistoryData()
+    fetchDashboardData()
+  }
 
   const handleToggleDevice = (name: string) => {
     setDeviceActiveStates((prev) => ({
@@ -177,11 +261,20 @@ function PageContent() {
     fetch(`${backendUrl}/getDashboardData?uid=${uid}`)
       .then((res) => {
         if (!res.ok) {
-          throw new Error("Failed to fetch dashboard data")
+          return null
         }
         return res.json()
       })
       .then((data) => {
+        if (!data) {
+          const cachedUser = typeof window !== "undefined" ? localStorage.getItem("volt_user") : null
+          const parsedUser = cachedUser ? JSON.parse(cachedUser) : null
+          if (parsedUser) {
+            setUser(parsedUser)
+          }
+          setDashboardData(getLocalDashboardFallback(parsedUser || userRef.current))
+          return
+        }
         if (data.hasOnboarded === false) {
           setUser(null)
           if (typeof window !== "undefined") {
@@ -237,11 +330,23 @@ function PageContent() {
     fetch(`${backendUrl}/getHistoryData?uid=${uid}`)
       .then((res) => {
         if (!res.ok) {
-          throw new Error("Failed to fetch history data")
+          return null
         }
         return res.json()
       })
       .then((data) => {
+        if (!data) {
+          const cachedRecharges = localStorage.getItem("volt_recharges")
+          const recharges = cachedRecharges ? JSON.parse(cachedRecharges) : []
+          const cachedLogs = localStorage.getItem("volt_power_logs")
+          const powerLogs = cachedLogs ? JSON.parse(cachedLogs) : []
+          setHistoryData({
+            recharges,
+            powerLogs,
+            usageLogs: []
+          })
+          return
+        }
         setHistoryData(data)
       })
       .catch((err) => {
@@ -268,11 +373,50 @@ function PageContent() {
     fetch(`${backendUrl}/getInsightsData?uid=${uid}`)
       .then((res) => {
         if (!res.ok) {
-          throw new Error("Failed to fetch insights data")
+          return null
         }
         return res.json()
       })
       .then((data) => {
+        if (!data) {
+          const cachedApps = localStorage.getItem("volt_appliances")
+          const appliancesList = cachedApps ? JSON.parse(cachedApps) : []
+          const cachedUser = typeof window !== "undefined" ? localStorage.getItem("volt_user") : null
+          const parsedUser = cachedUser ? JSON.parse(cachedUser) : null
+          const createdTime = parsedUser?.created_at ? new Date(parsedUser.created_at).getTime() : (auth.currentUser?.metadata?.creationTime ? new Date(auth.currentUser.metadata.creationTime).getTime() : Date.now())
+          const isNewUser = (Date.now() - createdTime) < 24 * 60 * 60 * 1000
+
+          let dailyBurn = 0
+          if (!isNewUser) {
+            appliancesList.forEach((app: any) => {
+              dailyBurn += (Number(app.wattage || app.custom_wattage || 0) * Number(app.hours || app.hours_per_day || 0)) / 1000
+            })
+            if (dailyBurn === 0) dailyBurn = 4.3
+          }
+          const dailyUsage = []
+          const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+          for (let i = 6; i >= 0; i--) {
+            const d = new Date()
+            d.setDate(d.getDate() - i)
+            const dayName = days[d.getDay()]
+            const variance = 0.85 + Math.random() * 0.3
+            const kwh = Number((dailyBurn * variance).toFixed(2))
+            const cost = Number((kwh * 209.50).toFixed(2))
+            dailyUsage.push({
+              label: dayName,
+              kwh,
+              cost
+            })
+          }
+          setInsightsData({
+            dailyUsage,
+            weeklyUsage: [],
+            monthlyUsage: [],
+            insights: [],
+            applianceBreakdown: []
+          })
+          return
+        }
         setInsightsData(data)
       })
       .catch((err) => {
@@ -338,6 +482,14 @@ function PageContent() {
         setDashboardData(null)
         setAuthResolved(true)
       } else {
+        if (!isSessionValid()) {
+          clearUserSession()
+          setUser(null)
+          setDashboardData(null)
+          setAuthResolved(true)
+          return
+        }
+        updateSessionTimestamp()
         if (!firebaseUser.emailVerified) {
           setAuthResolved(true)
           navigateTo("otp")
@@ -375,10 +527,21 @@ function PageContent() {
         const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
         fetch(`${backendUrl}/getDashboardData?uid=${firebaseUser.uid}`)
           .then((res) => {
-            if (!res.ok) throw new Error()
+            if (!res.ok) {
+              return null
+            }
             return res.json()
           })
           .then((data) => {
+            if (!data) {
+              const cachedUser = typeof window !== "undefined" ? localStorage.getItem("volt_user") : null
+              const parsedUser = cachedUser ? JSON.parse(cachedUser) : null
+              if (parsedUser) {
+                setUser(parsedUser)
+              }
+              setDashboardData(getLocalDashboardFallback(parsedUser || user))
+              return
+            }
             setDashboardData(data)
             if (data.appliances && typeof window !== "undefined") {
               localStorage.setItem("volt_appliances", JSON.stringify(data.appliances))
@@ -427,6 +590,14 @@ function PageContent() {
         .then(() => {
           if (auth.currentUser?.emailVerified) {
             clearInterval(interval)
+            const uid = auth.currentUser.uid
+            const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
+            fetch(`${backendUrl}/sendWelcomeEmailOnVerify`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ uid })
+            }).catch((e) => console.error("Welcome email trigger failed:", e))
+
             const name = signupTempData?.name || auth.currentUser.displayName || "User"
             const email = auth.currentUser.email || ""
             setUser({
@@ -452,6 +623,41 @@ function PageContent() {
   }, [pageParam, signupTempData])
 
   React.useEffect(() => {
+    const mode = searchParams.get("mode")
+    const oobCode = searchParams.get("oobCode")
+
+    if (mode === "verifyEmail" && oobCode) {
+      setIsLoading(true)
+      applyActionCode(auth, oobCode)
+        .then(async () => {
+          if (auth.currentUser) {
+            await auth.currentUser.reload()
+            const uid = auth.currentUser.uid
+            const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
+            fetch(`${backendUrl}/sendWelcomeEmailOnVerify`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ uid })
+            }).catch((e) => console.error("Welcome email trigger failed:", e))
+          }
+          toast.success("Email verified successfully!")
+          navigateTo("onboarding")
+        })
+        .catch((err) => {
+          console.error("Action code verification failed:", err)
+          if (auth.currentUser?.emailVerified) {
+            navigateTo("onboarding")
+          } else {
+            toast.error("Failed to verify email link.")
+          }
+        })
+        .finally(() => {
+          setIsLoading(false)
+        })
+    }
+  }, [searchParams])
+
+  React.useEffect(() => {
     if (!authResolved) return
 
     if (!user) {
@@ -459,7 +665,7 @@ function PageContent() {
         navigateTo("login")
       }
     } else {
-      if (pageParam === "otp") {
+      if (pageParam === "otp" && !auth.currentUser?.emailVerified) {
         return
       }
       if (!user.meterNumber) {
@@ -477,6 +683,7 @@ function PageContent() {
       }
     }
   }, [authResolved, user?.meterNumber, user?.plan, pageParam])
+
 
   React.useEffect(() => {
     if (pageParam === "dashboard" || pageParam === "splash") {
@@ -562,13 +769,49 @@ function PageContent() {
   React.useEffect(() => {
     if (!authResolved) return
     if (typeof window !== "undefined") {
-      if (user) {
+      if (user && isSessionValid()) {
         localStorage.setItem("volt_user", JSON.stringify(user))
       } else {
         localStorage.removeItem("volt_user")
       }
     }
   }, [user, authResolved])
+
+  React.useEffect(() => {
+    if (!authResolved || !user) return
+    let lastUpdate = Date.now()
+    const handleActivity = () => {
+      const now = Date.now()
+      if (now - lastUpdate > 60000) {
+        if (!isSessionValid()) {
+          clearUserSession()
+          setUser(null)
+          setDashboardData(null)
+          navigateTo("login")
+        } else {
+          updateSessionTimestamp()
+          lastUpdate = now
+        }
+      }
+    }
+    window.addEventListener("click", handleActivity)
+    window.addEventListener("keydown", handleActivity)
+    window.addEventListener("touchstart", handleActivity)
+    const interval = setInterval(() => {
+      if (!isSessionValid()) {
+        clearUserSession()
+        setUser(null)
+        setDashboardData(null)
+        navigateTo("login")
+      }
+    }, 60000)
+    return () => {
+      window.removeEventListener("click", handleActivity)
+      window.removeEventListener("keydown", handleActivity)
+      window.removeEventListener("touchstart", handleActivity)
+      clearInterval(interval)
+    }
+  }, [authResolved, user])
 
   React.useEffect(() => {
     if (!authResolved) return
@@ -595,13 +838,19 @@ function PageContent() {
         })
       })
         .then((res) => {
-          if (!res.ok) throw new Error("Payment verification failed")
+          if (!res.ok) {
+            toast.error("Payment verification failed. Please try again.")
+            setIsLoading(false)
+            navigateTo("subscription")
+            return null
+          }
           return res.json() as Promise<{
             plan: string
             subscription: { planType: string; status: string; endDate: string }
           }>
         })
         .then((data) => {
+          if (!data) return
           if (user) {
             const updatedUser = {
               ...user,
@@ -671,6 +920,7 @@ function PageContent() {
 
     createUserWithEmailAndPassword(auth, email, password)
       .then((result) => {
+        updateSessionTimestamp()
         sendEmailVerification(result.user)
           .catch((verifErr) => {
             console.error("Verification email failed to send:", verifErr)
@@ -703,19 +953,8 @@ function PageContent() {
       .catch((error) => {
         console.error("Signup failed:", error)
         if (error.code === "auth/email-already-in-use") {
-          signInWithEmailAndPassword(auth, email, password)
-            .then((res) => {
-              trackAnalyticsEvent("login", { email })
-              if (!res.user.emailVerified) {
-                sendEmailVerification(res.user)
-                  .catch((e) => console.error("Verification email failed to send:", e))
-              }
-            })
-            .catch((loginErr) => {
-              console.error("Auto-login fallback failed:", loginErr)
-              setSignupError("This email address is already registered.")
-              setIsLoading(false)
-            })
+          setSignupError("This email address is already registered. Please log in.")
+          setIsLoading(false)
         } else {
           setSignupError(error.message || "An unexpected error occurred.")
           setIsLoading(false)
@@ -733,6 +972,14 @@ function PageContent() {
     auth.currentUser.reload()
       .then(() => {
         if (auth.currentUser?.emailVerified) {
+          const uid = auth.currentUser.uid
+          const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
+          fetch(`${backendUrl}/sendWelcomeEmailOnVerify`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ uid })
+          }).catch((e) => console.error("Welcome email trigger failed:", e))
+
           const name = signupTempData?.name || auth.currentUser.displayName || "User"
           const email = auth.currentUser.email || ""
           setUser({
@@ -763,13 +1010,25 @@ function PageContent() {
   const handleResendOtp = () => {
     if (auth.currentUser) {
       setIsLoading(true)
-      sendEmailVerification(auth.currentUser)
-        .then(() => {
+      const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
+      fetch(`${backendUrl}/resendVerificationEmail`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uid: auth.currentUser.uid })
+      })
+        .then((res) => {
+          if (!res.ok) throw new Error("Failed to resend verification email")
           toast.success("Verification email resent successfully.")
         })
         .catch((err) => {
-          console.error(err)
-          toast.error("Failed to resend verification email. Please try again.")
+          console.error("Backend resend failed, falling back to Firebase Auth:", err)
+          sendEmailVerification(auth.currentUser!)
+            .then(() => {
+              toast.success("Verification email resent successfully.")
+            })
+            .catch(() => {
+              toast.error("Failed to resend verification email. Please try again.")
+            })
         })
         .finally(() => {
           setIsLoading(false)
@@ -777,12 +1036,12 @@ function PageContent() {
     }
   }
 
-  const handleVerifyMeter = React.useCallback((meterNumber: string, disco: string, meterType: string) => {
+  const handleVerifyMeter = React.useCallback((meterNumber: string, disco: string, meterType: string, tariffBand?: string) => {
     const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
     return fetch(`${backendUrl}/verifyMeterNumber`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ meterNumber, disco, meterType })
+      body: JSON.stringify({ meterNumber, disco, meterType, tariffBand })
     })
       .then((res) => {
         if (!res.ok) {
@@ -794,8 +1053,7 @@ function PageContent() {
         return { success: true, customerName: data.customerName }
       })
       .catch((err) => {
-        console.error(err)
-        return { success: true, customerName: "Test User (Verified)" }
+        return { success: false, error: err.message || "Verification failed" }
       })
   }, [])
 
@@ -816,6 +1074,7 @@ function PageContent() {
 
     signInWithEmailAndPassword(auth, email, password)
       .then((result) => {
+        updateSessionTimestamp()
         trackAnalyticsEvent("login", { email })
         if (!result.user.emailVerified) {
           sendEmailVerification(result.user)
@@ -990,14 +1249,20 @@ function PageContent() {
       })
     })
       .then((res) => {
-        if (!res.ok) throw new Error("Payment initialization failed")
+        if (!res.ok) {
+          toast.error("Payment initialization failed. Please try again.")
+          setIsLoading(false)
+          return null
+        }
         return res.json() as Promise<{ authorization_url: string }>
       })
       .then((data) => {
+        if (!data) return
         if (data.authorization_url) {
           window.location.href = data.authorization_url
         } else {
-          throw new Error("Invalid response from server")
+          toast.error("Invalid payment checkout response.")
+          setIsLoading(false)
         }
       })
       .catch((err) => {
@@ -1045,7 +1310,7 @@ function PageContent() {
 
   const handleTogglePower = (state: "on" | "off") => {
     setPowerState(state)
-    setIsDashboardLoading(true)
+    localStorage.setItem("volt_power_state", state)
     const localLogsStr = localStorage.getItem("volt_power_logs")
     const localLogs = localLogsStr ? JSON.parse(localLogsStr) : []
     if (state === "on") {
@@ -1068,6 +1333,22 @@ function PageContent() {
       }
     }
     localStorage.setItem("volt_power_logs", JSON.stringify(localLogs))
+
+    setHistoryData((prev: any) => ({
+      ...prev,
+      powerLogs: localLogs
+    }))
+
+    setDashboardData((prev: any) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        powerState: state,
+        isPowerAvailable: state === "on",
+        currentSessionStart: state === "on" ? new Date().toISOString() : null
+      }
+    })
+
     const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
     const uid = auth.currentUser?.uid || "mock-uid"
     fetch(`${backendUrl}/logPowerSupply`, {
@@ -1077,12 +1358,12 @@ function PageContent() {
     })
       .then((res) => {
         if (!res.ok) {
-          throw new Error("Failed to log power supply")
+          return null
         }
         return res.json()
       })
       .then((data) => {
-        if (data.success) {
+        if (data && data.success) {
           fetchDashboardData()
           fetchHistoryData()
         }
@@ -1155,8 +1436,17 @@ function PageContent() {
     setIsSubmitting(true)
     const cachedApps = localStorage.getItem("volt_appliances")
     const apps = cachedApps ? JSON.parse(cachedApps) : []
-    apps.push(appliance)
-    localStorage.setItem("volt_appliances", JSON.stringify(apps))
+    const updatedApps = [...apps.filter((a: any) => a.name !== appliance.name), appliance]
+    localStorage.setItem("volt_appliances", JSON.stringify(updatedApps))
+
+    setDashboardData((prev: any) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        appliances: [...(prev.appliances || []).filter((a: any) => a.name !== appliance.name), appliance]
+      }
+    })
+
     const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
     const uid = auth.currentUser?.uid || "mock-uid"
     fetch(`${backendUrl}/addAppliance`, {
@@ -1171,11 +1461,12 @@ function PageContent() {
     })
       .then((res) => {
         if (!res.ok) {
-          throw new Error("Failed to add appliance")
+          return null
         }
         return res.json()
       })
-      .then(() => {
+      .then((data) => {
+        if (!data) return
         fetchDashboardData()
       })
       .catch((err) => {
@@ -1193,6 +1484,15 @@ function PageContent() {
     let apps = cachedApps ? JSON.parse(cachedApps) : []
     apps = apps.map((a: any) => a.name === appliance.name ? appliance : a)
     localStorage.setItem("volt_appliances", JSON.stringify(apps))
+
+    setDashboardData((prev: any) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        appliances: (prev.appliances || []).map((a: any) => a.name === appliance.name ? appliance : a)
+      }
+    })
+
     const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
     const uid = auth.currentUser?.uid || "mock-uid"
     fetch(`${backendUrl}/updateAppliance`, {
@@ -1207,11 +1507,12 @@ function PageContent() {
     })
       .then((res) => {
         if (!res.ok) {
-          throw new Error("Failed to update appliance")
+          return null
         }
         return res.json()
       })
-      .then(() => {
+      .then((data) => {
+        if (!data) return
         fetchDashboardData()
       })
       .catch((err) => {
@@ -1229,6 +1530,15 @@ function PageContent() {
     let apps = cachedApps ? JSON.parse(cachedApps) : []
     apps = apps.filter((a: any) => a.name !== name)
     localStorage.setItem("volt_appliances", JSON.stringify(apps))
+
+    setDashboardData((prev: any) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        appliances: (prev.appliances || []).filter((a: any) => a.name !== name)
+      }
+    })
+
     const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
     const uid = auth.currentUser?.uid || "mock-uid"
     fetch(`${backendUrl}/deleteAppliance`, {
@@ -1241,11 +1551,12 @@ function PageContent() {
     })
       .then((res) => {
         if (!res.ok) {
-          throw new Error("Failed to delete appliance")
+          return null
         }
         return res.json()
       })
-      .then(() => {
+      .then((data) => {
+        if (!data) return
         fetchDashboardData()
       })
       .catch((err) => {
@@ -1290,12 +1601,12 @@ function PageContent() {
     })
       .then((res) => {
         if (!res.ok) {
-          throw new Error("Failed to edit recharge")
+          return null
         }
         return res.json()
       })
       .then((data) => {
-        if (data.success && user) {
+        if (data && data.success && user) {
           setUser({ ...user, currentUnits: data.newUnits })
         }
         fetchDashboardData()
@@ -1340,12 +1651,12 @@ function PageContent() {
     })
       .then((res) => {
         if (!res.ok) {
-          throw new Error("Failed to delete recharge")
+          return null
         }
         return res.json()
       })
       .then((data) => {
-        if (data.success && user) {
+        if (data && data.success && user) {
           setUser({ ...user, currentUnits: data.newUnits })
         }
         fetchDashboardData()
@@ -1377,7 +1688,7 @@ function PageContent() {
     })
       .then((res) => {
         if (!res.ok) {
-          throw new Error("Failed to update preferences")
+          return null
         }
         return res.json()
       })
@@ -1390,18 +1701,10 @@ function PageContent() {
   }
 
   const handleLogout = () => {
-    signOut(auth)
-      .then(() => {
-        if (typeof window !== "undefined") {
-          localStorage.removeItem("volt_user")
-          localStorage.removeItem("volt_appliances")
-          localStorage.removeItem("volt_power_logs")
-          localStorage.removeItem("volt_recharges")
-        }
-      })
-      .catch((err) => {
-        console.error(err)
-      })
+    clearUserSession()
+    setUser(null)
+    setDashboardData(null)
+    navigateTo("splash")
   }
 
   const handleTabChange = (tab: TabType) => {
@@ -1515,7 +1818,7 @@ function PageContent() {
             daysRemaining={dashboardData?.daysRemaining ?? 4}
             dailyBurnRate={dashboardData?.dailyBurnRate ?? 4.3}
             powerSupplyHours={dashboardData?.powerSupplyHours ?? supplyHours}
-            powerState={dashboardData?.powerState || powerState}
+            powerState={powerState}
             recentActivity={dashboardData?.recentActivity || []}
             expectedSupplyHours={dashboardData?.expectedSupplyHours ?? 20}
             tariffBand={dashboardData?.tariffBand || activeUser.tariffBand || "Band A"}
@@ -1533,6 +1836,7 @@ function PageContent() {
             estimatedSessionMinutes={dashboardData?.estimatedSessionMinutes ?? 0}
             currentSessionStart={dashboardData?.currentSessionStart}
             onCalibrateManual={() => setShowManualCalibration(true)}
+            onBuyUnits={() => setIsPurchaseUnitsOpen(true)}
           />
         )}
         {pageParam === "calculator" && (
@@ -1548,23 +1852,43 @@ function PageContent() {
               }[activeUser.tariffBand || "Band A"] ?? 209.50)
             }
             burnRate={dashboardData?.dailyBurnRate ?? 4.3}
-            onSaveRecharge={(amount, units) => {
+            onSaveRecharge={(rawAmount, rawUnits) => {
               setIsSubmitting(true)
+              const amount = Math.round(Number(rawAmount) || 0)
+              const units = Number(Number(rawUnits || 0).toFixed(2))
               const cachedRecharges = localStorage.getItem("volt_recharges")
               const recharges = cachedRecharges ? JSON.parse(cachedRecharges) : []
-              recharges.unshift({
+              const newRecharge = {
                 id: "local_" + Date.now(),
                 amount,
                 units,
                 date: new Date().toISOString(),
                 source: "Manual"
-              })
+              }
+              recharges.unshift(newRecharge)
               localStorage.setItem("volt_recharges", JSON.stringify(recharges))
+
+              setHistoryData((prev: any) => ({
+                ...prev,
+                recharges: [newRecharge, ...(prev?.recharges || [])]
+              }))
+
+              setDashboardData((prev: any) => {
+                if (!prev) return prev
+                return {
+                  ...prev,
+                  remainingUnits: Number(((prev.remainingUnits || 0) + Number(units)).toFixed(2))
+                }
+              })
 
               if (user) {
                 const newUnits = (user.currentUnits || 0) + Number(units)
-                setUser({ ...user, currentUnits: Number(newUnits.toFixed(2)) })
+                const updatedUser = { ...user, currentUnits: Number(newUnits.toFixed(2)) }
+                setUser(updatedUser)
+                localStorage.setItem("volt_user", JSON.stringify(updatedUser))
               }
+
+              toast.success("Electricity units logged successfully!")
 
               const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
               const uid = auth.currentUser?.uid || "mock-uid"
@@ -1582,11 +1906,12 @@ function PageContent() {
               })
                 .then((res) => {
                   if (!res.ok) {
-                    throw new Error("Failed to log recharge")
+                    return null
                   }
                   return res.json()
                 })
                 .then((data) => {
+                  if (!data) return
                   if (data.success && user) {
                     setUser({ ...user, currentUnits: data.newUnits })
                   }
@@ -1609,6 +1934,7 @@ function PageContent() {
             isHistoryLoading={isHistoryLoading}
             onEditRecharge={handleEditRecharge}
             onDeleteRecharge={handleDeleteRecharge}
+            onBuyUnits={() => setIsPurchaseUnitsOpen(true)}
           />
         )}
         {pageParam === "insights" && (
@@ -1645,8 +1971,33 @@ function PageContent() {
             isSubmitting={isSubmitting}
             onCancelSubscription={handleCancelSubscription}
             isCancelling={isCancelling}
+            onDeleteAccount={async () => {
+              try {
+                if (!auth.currentUser) return
+                const token = await auth.currentUser.getIdToken()
+                const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
+                const res = await fetch(`${backendUrl}/deleteUserAccount`, {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}`
+                  }
+                })
+                if (res.ok) {
+                  toast.success("Account and associated data deleted successfully.")
+                  await handleLogout()
+                } else {
+                  const data = await res.json().catch(() => null)
+                  toast.error(data?.error || "Failed to delete account.")
+                }
+              } catch (e) {
+                console.error("Delete account error:", e)
+                toast.error("Failed to delete account.")
+              }
+            }}
           />
         )}
+
         {pageParam === "history" && (
           <HistoryPage
             isLoading={isHistoryLoading}
@@ -1811,6 +2162,20 @@ function PageContent() {
           </div>
         </div>
       )}
+
+      <PurchaseUnitsModal
+        isOpen={isPurchaseUnitsOpen}
+        onClose={() => setIsPurchaseUnitsOpen(false)}
+        currentUserMeter={activeUser.meterNumber}
+        currentUserDisco={activeUser.disco}
+        currentUserTariffBand={activeUser.tariffBand}
+        currentUserMeterType={activeUser.meterType}
+        userEmail={activeUser.email}
+        userPhone={activeUser.phone}
+        uid={auth.currentUser?.uid || "mock-uid"}
+        onVerifyMeter={handleVerifyMeter}
+        onPurchaseSuccess={handlePurchaseUnitsSuccess}
+      />
     </div>
   )
 }

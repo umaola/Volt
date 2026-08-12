@@ -210,15 +210,15 @@ export function SignupPage({
 
         <form onSubmit={handleSubmit} className="w-full flex flex-col gap-4 mt-2">
           {error && (
-            <div className="w-full p-4 bg-red-50 border border-red-200 rounded-xl flex flex-col gap-1 text-sm text-red-800 animate-fade-in">
+            <div className="w-full p-4 bg-red-50 border border-red-200 rounded-xl flex flex-col gap-2 text-sm text-red-800 animate-fade-in">
               <span className="font-semibold">{error}</span>
-              {error.toLowerCase().includes("already") && (
+              {(error.toLowerCase().includes("already") || error.toLowerCase().includes("registered") || error.toLowerCase().includes("log in")) && (
                 <button
                   type="button"
                   onClick={onNavigateToLogin}
-                  className="text-xs font-bold text-red-600 hover:underline self-start mt-1 cursor-pointer"
+                  className="text-xs font-bold text-red-700 hover:text-red-900 underline self-start cursor-pointer flex items-center gap-1 mt-0.5"
                 >
-                  Go to Login &rarr;
+                  Log in to your account &rarr;
                 </button>
               )}
             </div>

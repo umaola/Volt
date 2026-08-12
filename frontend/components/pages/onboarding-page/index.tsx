@@ -22,7 +22,8 @@ interface OnboardingPageProps {
   onVerifyMeter: (
     meterNumber: string,
     disco: string,
-    meterType: string
+    meterType: string,
+    tariffBand?: string
   ) => Promise<{ success: boolean; customerName?: string; error?: string }>
 }
 
@@ -75,7 +76,7 @@ export function OnboardingPage({
       setVerifiedName("")
 
       const delayDebounce = setTimeout(() => {
-        onVerifyMeter(cleanMeter, disco, meterType)
+        onVerifyMeter(cleanMeter, disco, meterType, tariffBand)
           .then((res) => {
             if (res.success && res.customerName) {
               setVerifiedName(res.customerName)
@@ -96,7 +97,7 @@ export function OnboardingPage({
       setVerifiedName("")
       setVerificationError(null)
     }
-  }, [meterNumber, disco, meterType, onVerifyMeter])
+  }, [meterNumber, disco, meterType, tariffBand, onVerifyMeter])
 
   const handleApplianceToggle = (item: { name: string; defaultWattage: number; defaultHours: number }) => {
     const exists = selectedAppliances.find((a) => a.name === item.name)

@@ -14,7 +14,7 @@ const firebaseConfig = {
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp()
 const auth = getAuth(app)
 
-if (process.env.NODE_ENV === "development") {
+if (process.env.NODE_ENV === "development" && process.env.NEXT_PUBLIC_USE_FIREBASE_EMULATOR === "true") {
   try {
     if (!(auth as unknown as { _emulatorConfig?: unknown })._emulatorConfig) {
       const host = typeof window !== "undefined" ? window.location.hostname : "127.0.0.1"
@@ -74,7 +74,13 @@ if (typeof window !== "undefined") {
   window.fetch = async (url: RequestInfo | URL, options?: RequestInit) => {
     const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
     if (backendUrl && typeof url === "string" && url.startsWith(backendUrl)) {
-      const token = auth.currentUser ? await auth.currentUser.getIdToken() : ""
+      let token = ""
+      try {
+        if (auth.currentUser) {
+          token = await auth.currentUser.getIdToken()
+        }
+      } catch {
+      }
       const headers = {
         "Content-Type": "application/json",
         ...options?.headers,

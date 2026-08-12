@@ -1,4 +1,5 @@
 import * as React from "react"
+import { IconBolt } from "@tabler/icons-react"
 
 interface HeroHeaderProps {
   userName: string
@@ -52,7 +53,7 @@ export function HeroHeader({
     </div>
   )
 }
-
+ 
 interface ExpandedHeaderProps {
   userName: string
   remainingUnits: number
@@ -60,6 +61,7 @@ interface ExpandedHeaderProps {
   expectedSupplyHours: number
   onProfileClick: () => void
   onCalibrateManual?: () => void
+  onBuyUnits?: () => void
 }
 
 export function ExpandedHeader({
@@ -68,7 +70,8 @@ export function ExpandedHeader({
   tariffBand,
   expectedSupplyHours,
   onProfileClick,
-  onCalibrateManual
+  onCalibrateManual,
+  onBuyUnits
 }: ExpandedHeaderProps) {
   const initials = userName
     ? userName
@@ -92,31 +95,43 @@ export function ExpandedHeader({
         </div>
         <button
           onClick={onProfileClick}
-          className="w-10 h-10 rounded-full bg-white/20 border border-white/30 text-white font-bold flex items-center justify-center text-sm shadow-sm transition-all hover:bg-white/30 active:scale-95"
+          className="w-10 h-10 rounded-full bg-white/20 border border-white/30 text-white font-bold flex items-center justify-center text-sm shadow-sm transition-all hover:bg-white/30 active:scale-95 cursor-pointer"
         >
           {initials}
         </button>
       </div>
 
-      <div className="bg-white/10 border border-white/20 backdrop-blur-md rounded-[1.5rem] p-5 flex justify-between items-center w-full shadow-sm z-10">
-        <div className="flex flex-col justify-center">
-          <div className="flex items-baseline gap-1">
-            <span className="text-5xl font-black tracking-tight">{remainingUnits.toFixed(0)}</span>
-            <span className="text-lg font-bold text-white/90">kWh</span>
-          </div>
-          <span className="text-white/70 text-xs font-semibold tracking-wider mt-1">Units Remaining</span>
-        </div>
-
-        <div className="flex flex-col gap-2 shrink-0">
-          <div className="bg-white/20 border border-white/20 rounded-2xl px-4 py-1.5 flex flex-col items-center justify-center min-w-[100px]">
-            <span className="text-white font-bold text-xs leading-none">{tariffBand}</span>
-            <span className="text-white/80 text-[8px] font-medium tracking-wide mt-0.5 uppercase">Tariff Band</span>
+      <div className="bg-white/10 border border-white/20 backdrop-blur-md rounded-[1.5rem] p-5 flex flex-col gap-3 w-full shadow-sm z-10">
+        <div className="flex justify-between items-center w-full">
+          <div className="flex flex-col justify-center">
+            <div className="flex items-baseline gap-1">
+              <span className="text-5xl font-black tracking-tight">{remainingUnits.toFixed(0)}</span>
+              <span className="text-lg font-bold text-white/90">kWh</span>
+            </div>
+            <span className="text-white/70 text-xs font-semibold tracking-wider mt-1">Units Remaining</span>
           </div>
 
-          <div className="bg-white/20 border border-white/20 rounded-2xl px-4 py-1.5 flex items-center justify-center min-w-[100px]">
-            <span className="text-white font-bold text-xs leading-none">{expectedSupplyHours}+ hrs/day</span>
+          <div className="flex flex-col gap-2 shrink-0">
+            <div className="bg-white/20 border border-white/20 rounded-2xl px-4 py-1.5 flex flex-col items-center justify-center min-w-[100px]">
+              <span className="text-white font-bold text-xs leading-none">{tariffBand}</span>
+              <span className="text-white/80 text-[8px] font-medium tracking-wide mt-0.5 uppercase">Tariff Band</span>
+            </div>
+
+            <div className="bg-white/20 border border-white/20 rounded-2xl px-4 py-1.5 flex items-center justify-center min-w-[100px]">
+              <span className="text-white font-bold text-xs leading-none">{expectedSupplyHours}+ hrs/day</span>
+            </div>
           </div>
         </div>
+
+        {onBuyUnits && (
+          <button
+            onClick={onBuyUnits}
+            className="flex items-center justify-center gap-1.5 w-full py-2 bg-white text-[#00BF63] hover:bg-emerald-50 rounded-xl text-xs font-bold transition-all shadow-sm active:scale-98 cursor-pointer mt-1"
+          >
+            <IconBolt className="w-4 h-4 text-[#00BF63] fill-[#00BF63]" />
+            <span>Buy Electricity Units</span>
+          </button>
+        )}
       </div>
     </div>
   )
