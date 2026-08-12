@@ -1,13 +1,5 @@
 {
-  "version": 2,
   "buildCommand": "cd frontend && npm install && npm run build",
-  "outputDirectory": "frontend/out",
-  "cleanUrls": true,
-  "trailingSlash": true,
-  "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "frontend/out/$1"
-    }
-  ]
+  "outputDirectory": "frontend/.next",
+  "framework": "nextjs"
 }
