@@ -487,13 +487,28 @@ export const verifyEmailOtp = onRequest({ cors: true }, async (request, response
         }
 
         const targetUid = uid || data?.uid;
-        const { getAuth } = await import("firebase-admin/auth");
         if (targetUid) {
-            await getAuth().updateUser(targetUid, { emailVerified: true });
+            try {
+                const { getAuth } = await import("firebase-admin/auth");
+                await getAuth().updateUser(targetUid, { emailVerified: true });
+            } catch (authErr) {
+                logger.warn("Auth Admin updateUser emailVerified fallback:", authErr);
+            }
+            try {
+                await db.collection("users").doc(targetUid).set({ email_verified: true }, { merge: true });
+            } catch (dbErr) {
+                logger.warn("Firestore updateUser email_verified fallback:", dbErr);
+            }
         } else {
-            const userRec = await getAuth().getUserByEmail(cleanEmail);
-            if (userRec) {
-                await getAuth().updateUser(userRec.uid, { emailVerified: true });
+            try {
+                const { getAuth } = await import("firebase-admin/auth");
+                const userRec = await getAuth().getUserByEmail(cleanEmail);
+                if (userRec) {
+                    await getAuth().updateUser(userRec.uid, { emailVerified: true });
+                    await db.collection("users").doc(userRec.uid).set({ email_verified: true }, { merge: true });
+                }
+            } catch (authErr) {
+                logger.warn("Auth Admin getUserByEmail fallback:", authErr);
             }
         }
 
@@ -523,26 +538,55 @@ export const resendVerificationEmail = onRequest({ cors: true }, async (request,
 
         const { uid, email } = request.body || request.query || {};
 
-        const { getAuth } = await import("firebase-admin/auth");
-        let userRecord;
-        if (uid) {
-            userRecord = await getAuth().getUser(uid);
-        } else if (email) {
-            userRecord = await getAuth().getUserByEmail(email);
+        let cleanEmail = email ? String(email).toLowerCase().trim() : "";
+        let targetUid = uid ? String(uid) : "";
+        let name = "Volt User";
+
+        if (!cleanEmail && targetUid) {
+            try {
+                const userDoc = await db.collection("users").doc(targetUid).get();
+                if (userDoc.exists) {
+                    const uData = userDoc.data();
+                    cleanEmail = uData?.email ? String(uData.email).toLowerCase().trim() : "";
+                    name = uData?.name || name;
+                }
+            } catch (e) {}
         }
 
-        if (!userRecord || !userRecord.email) {
-            response.status(400).send({ error: "User or email not found" });
+        if (cleanEmail) {
+            try {
+                const existingVerif = await db.collection("email_verifications").doc(cleanEmail).get();
+                if (existingVerif.exists) {
+                    const vData = existingVerif.data();
+                    name = vData?.name || name;
+                    targetUid = targetUid || vData?.uid;
+                }
+            } catch (e) {}
+        }
+
+        if (!cleanEmail && targetUid) {
+            try {
+                const { getAuth } = await import("firebase-admin/auth");
+                const userRecord = await getAuth().getUser(targetUid);
+                if (userRecord?.email) {
+                    cleanEmail = userRecord.email.toLowerCase().trim();
+                    name = userRecord.displayName || name;
+                }
+            } catch (authErr) {
+                logger.warn("Could not fetch user from Auth Admin:", authErr);
+            }
+        }
+
+        if (!cleanEmail) {
+            response.status(400).send({ error: "User email not found. Please provide an email address." });
             return;
         }
 
-        const cleanEmail = userRecord.email.toLowerCase().trim();
-        const name = userRecord.displayName || "Volt User";
         const otp = Math.floor(10000 + Math.random() * 90000).toString();
 
         await db.collection("email_verifications").doc(cleanEmail).set({
             code: otp,
-            uid: userRecord.uid,
+            uid: targetUid || "",
             email: cleanEmail,
             name,
             createdAt: Date.now(),
