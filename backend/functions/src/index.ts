@@ -50,27 +50,10 @@ function getClientIp(request: any): string {
 async function sendVerificationOtpEmail(name: string, email: string, otp: string): Promise<{ sent: boolean; reason?: string }> {
     if (!email) return { sent: false, reason: "No email provided" };
 
-    const host = process.env.SMTP_HOST || "smtp.zeptomail.com";
-    const port = Number(process.env.SMTP_PORT) || 465;
-    const secure = process.env.SMTP_SECURE === "true" || port === 465;
-    const user = process.env.SMTP_USER;
-    const pass = process.env.SMTP_PASS;
-    const fromAddress = process.env.SMTP_FROM || user || "info@voltdigitalservices.com";
+    const zeptoToken = process.env.ZEPTOMAIL_TOKEN || process.env.ZEPTOMAIL_API_KEY;
+    const fromAddress = process.env.SMTP_FROM || process.env.ZEPTOMAIL_FROM || "info@voltdigitalservices.com";
 
-    if (!user || !pass) {
-        logger.info(`SMTP credentials not configured. Verification OTP for ${email}: ${otp}`);
-        return { sent: false, reason: "SMTP credentials not configured" };
-    }
-
-    try {
-        const transporter = nodemailer.createTransport({
-            host,
-            port,
-            secure,
-            auth: { user, pass }
-        });
-
-        const htmlContent = `
+    const htmlContent = `
 <!DOCTYPE html>
 <html>
 <head>
@@ -99,7 +82,7 @@ async function sendVerificationOtpEmail(name: string, email: string, otp: string
             <td style="padding:32px;">
               <h2 style="margin:0 0 16px 0;font-size:22px;font-weight:600;color:#121212;">Verify Your Email Address</h2>
               <p style="margin:0 0 20px 0;font-size:15px;line-height:1.6;color:#4B5563;">
-                Hello ${name || "there"}, thank you for signing up with <strong>Volt</strong>. Use the verification code below to complete your registration:
+                Hello ${name || "there"}, thank you for signing up with <strong>Volt</strong>. Use the 5-digit verification code below to complete your registration:
               </p>
               <div style="text-align:center;margin:32px 0;">
                 <div style="display:inline-block;background-color:#F0FDF4;border:2px dashed #00BF63;border-radius:16px;padding:16px 36px;">
@@ -127,13 +110,62 @@ async function sendVerificationOtpEmail(name: string, email: string, otp: string
 </html>
 `;
 
+    if (zeptoToken) {
+        try {
+            const authHeader = zeptoToken.startsWith("Zoho-enczapikey ") ? zeptoToken : `Zoho-enczapikey ${zeptoToken}`;
+            const res = await fetch("https://api.zeptomail.com/v1.1/email", {
+                method: "POST",
+                headers: {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "Authorization": authHeader
+                },
+                body: JSON.stringify({
+                    from: { address: fromAddress, name: "Volt" },
+                    to: [{ email_address: { address: email, name: name || "Volt User" } }],
+                    subject: `${otp} is your Volt verification code`,
+                    htmlbody: htmlContent
+                })
+            });
+
+            if (res.ok) {
+                logger.info(`Verification OTP sent via ZeptoMail API to ${email}`);
+                return { sent: true };
+            } else {
+                const errText = await res.text();
+                logger.error(`ZeptoMail API error for ${email}:`, errText);
+            }
+        } catch (apiErr) {
+            logger.error(`ZeptoMail API request error for ${email}:`, apiErr);
+        }
+    }
+
+    const host = process.env.SMTP_HOST || "smtp.zeptomail.com";
+    const port = Number(process.env.SMTP_PORT) || 465;
+    const secure = process.env.SMTP_SECURE === "true" || port === 465;
+    const user = process.env.SMTP_USER;
+    const pass = process.env.SMTP_PASS;
+
+    if (!user || !pass) {
+        logger.info(`SMTP/ZeptoMail credentials not configured. Verification OTP for ${email}: ${otp}`);
+        return { sent: false, reason: "SMTP credentials not configured" };
+    }
+
+    try {
+        const transporter = nodemailer.createTransport({
+            host,
+            port,
+            secure,
+            auth: { user, pass }
+        });
+
         await transporter.sendMail({
             from: { name: "Volt", address: fromAddress },
             to: email,
             subject: `${otp} is your Volt verification code`,
             html: htmlContent
         });
-        logger.info(`Verification OTP sent successfully to ${email}`);
+        logger.info(`Verification OTP sent successfully via SMTP to ${email}`);
         return { sent: true };
     } catch (error) {
         logger.error(`Error sending verification OTP to ${email}:`, error);
@@ -427,7 +459,7 @@ export const verifyEmailOtp = onRequest({ cors: true }, async (request, response
 
         const { email, code, uid } = request.body || {};
         if (!email || !code) {
-            response.status(400).send({ error: "Email and 6-digit verification code are required" });
+            response.status(400).send({ error: "Email and 5-digit verification code are required" });
             return;
         }
 
@@ -506,7 +538,7 @@ export const resendVerificationEmail = onRequest({ cors: true }, async (request,
 
         const cleanEmail = userRecord.email.toLowerCase().trim();
         const name = userRecord.displayName || "Volt User";
-        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const otp = Math.floor(10000 + Math.random() * 90000).toString();
 
         await db.collection("email_verifications").doc(cleanEmail).set({
             code: otp,
@@ -551,7 +583,7 @@ export const createUser = onRequest({ cors: true }, async (request, response) =>
 
         if (email) {
             const cleanEmail = email.toLowerCase().trim();
-            const otp = Math.floor(100000 + Math.random() * 900000).toString();
+            const otp = Math.floor(10000 + Math.random() * 90000).toString();
             await db.collection("email_verifications").doc(cleanEmail).set({
                 code: otp,
                 uid,

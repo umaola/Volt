@@ -998,8 +998,8 @@ function PageContent() {
     const email = signupTempData?.email || auth.currentUser?.email || ""
     const uid = auth.currentUser?.uid || ""
 
-    if (!code || code.length !== 6) {
-      setSignupError("Please enter the complete 6-digit verification code.")
+    if (!code || code.length !== 5) {
+      setSignupError("Please enter the complete 5-digit verification code.")
       setIsLoading(false)
       return
     }
@@ -1072,7 +1072,7 @@ function PageContent() {
         const data = await res.json()
         throw new Error(data.error || "Failed to resend verification code")
       }
-      toast.success("A new 6-digit verification code has been sent to your email.")
+      toast.success("A new 5-digit verification code has been sent to your email.")
     } catch (err: any) {
       console.error("Failed to resend verification OTP:", err)
       toast.error(err.message || "Failed to resend verification code. Please try again.")

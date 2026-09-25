@@ -42,7 +42,7 @@ export function OtpPage({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (code.length === 6 && !isLoading) {
+    if (code.length === 5 && !isLoading) {
       onVerify(code)
     }
   }
@@ -58,7 +58,7 @@ export function OtpPage({
           <div className="flex flex-col gap-1.5">
             <h2 className="text-2xl font-bold text-zinc-900 tracking-tight">Verify your email</h2>
             <p className="text-sm text-zinc-500 font-medium px-2 leading-relaxed">
-              Enter the 6-digit code sent to <span className="font-semibold text-zinc-800">{email}</span>
+              Enter the 5-digit code sent to <span className="font-semibold text-zinc-800">{email}</span>
             </p>
           </div>
         </div>
@@ -72,26 +72,25 @@ export function OtpPage({
 
           <div className="flex justify-center w-full my-1">
             <InputOTP
-              maxLength={6}
+              maxLength={5}
               value={code}
               onChange={setCode}
               pattern={REGEXP_ONLY_DIGITS}
               disabled={isLoading}
             >
-              <InputOTPGroup className="gap-2">
-                <InputOTPSlot index={0} className="w-11 h-12 text-lg font-bold text-[#121212] rounded-xl border border-zinc-200 bg-zinc-50/50" />
-                <InputOTPSlot index={1} className="w-11 h-12 text-lg font-bold text-[#121212] rounded-xl border border-zinc-200 bg-zinc-50/50" />
-                <InputOTPSlot index={2} className="w-11 h-12 text-lg font-bold text-[#121212] rounded-xl border border-zinc-200 bg-zinc-50/50" />
-                <InputOTPSlot index={3} className="w-11 h-12 text-lg font-bold text-[#121212] rounded-xl border border-zinc-200 bg-zinc-50/50" />
-                <InputOTPSlot index={4} className="w-11 h-12 text-lg font-bold text-[#121212] rounded-xl border border-zinc-200 bg-zinc-50/50" />
-                <InputOTPSlot index={5} className="w-11 h-12 text-lg font-bold text-[#121212] rounded-xl border border-zinc-200 bg-zinc-50/50" />
+              <InputOTPGroup className="gap-2.5">
+                <InputOTPSlot index={0} className="w-12 h-14 text-xl font-bold text-[#121212] rounded-xl border border-zinc-200 bg-zinc-50/50" />
+                <InputOTPSlot index={1} className="w-12 h-14 text-xl font-bold text-[#121212] rounded-xl border border-zinc-200 bg-zinc-50/50" />
+                <InputOTPSlot index={2} className="w-12 h-14 text-xl font-bold text-[#121212] rounded-xl border border-zinc-200 bg-zinc-50/50" />
+                <InputOTPSlot index={3} className="w-12 h-14 text-xl font-bold text-[#121212] rounded-xl border border-zinc-200 bg-zinc-50/50" />
+                <InputOTPSlot index={4} className="w-12 h-14 text-xl font-bold text-[#121212] rounded-xl border border-zinc-200 bg-zinc-50/50" />
               </InputOTPGroup>
             </InputOTP>
           </div>
 
           <PrimaryButton
             type="submit"
-            disabled={code.length !== 6 || isLoading}
+            disabled={code.length !== 5 || isLoading}
             isLoading={isLoading}
           >
             Verify Code
