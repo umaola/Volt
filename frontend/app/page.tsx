@@ -19,7 +19,7 @@ import { TermsPage } from "@/components/pages/terms-page"
 import { PrivacyPage } from "@/components/pages/privacy-page"
 import { PurchaseUnitsModal } from "@/components/pages/purchase-units"
 import { BottomNavigation, TabType } from "@/components/design-system/bottom-navigation"
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail, onAuthStateChanged, signOut, sendEmailVerification, applyActionCode } from "firebase/auth"
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail, onAuthStateChanged, signOut, applyActionCode, checkActionCode, signInWithCustomToken } from "firebase/auth"
 import { auth, getFcmToken, onMessageListener } from "@/lib/firebase"
 import { toast } from "sonner"
 
@@ -482,7 +482,9 @@ function PageContent() {
         setDashboardData(null)
         setAuthResolved(true)
       } else {
-        if (!isSessionValid()) {
+        const urlParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null
+        const isVerifying = urlParams?.get("mode") === "verifyEmail"
+        if (!isSessionValid() && !isVerifying) {
           clearUserSession()
           setUser(null)
           setDashboardData(null)
@@ -490,13 +492,12 @@ function PageContent() {
           return
         }
         updateSessionTimestamp()
-        if (!firebaseUser.emailVerified) {
+        if (!firebaseUser.emailVerified && !isVerifying) {
           setAuthResolved(true)
           navigateTo("otp")
           return
         }
-        const urlParams = new URLSearchParams(window.location.search)
-        const currentPage = urlParams.get("page") || "splash"
+        const currentPage = urlParams?.get("page") || "splash"
         if (currentPage === "otp") {
           setAuthResolved(true)
           return
@@ -583,24 +584,59 @@ function PageContent() {
   }, [])
 
   React.useEffect(() => {
-    if (pageParam !== "otp" || !auth.currentUser) return
+    const mode = searchParams.get("mode")
+    const oobCode = searchParams.get("oobCode")
 
-    const interval = setInterval(() => {
-      auth.currentUser?.reload()
-        .then(() => {
+    if (mode === "verifyEmail" && oobCode) {
+      setIsLoading(true)
+      let extractedEmail = ""
+
+      checkActionCode(auth, oobCode)
+        .then((info) => {
+          extractedEmail = info.data.email || ""
+          return applyActionCode(auth, oobCode)
+        })
+        .catch(async (checkOrApplyErr) => {
           if (auth.currentUser?.emailVerified) {
-            clearInterval(interval)
+            return
+          }
+          throw checkOrApplyErr
+        })
+        .then(async () => {
+          updateSessionTimestamp()
+          const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
+
+          if (!auth.currentUser && extractedEmail) {
+            try {
+              const res = await fetch(`${backendUrl}/loginWithVerifiedEmail`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email: extractedEmail })
+              })
+              if (res.ok) {
+                const data = await res.json()
+                if (data.customToken) {
+                  await signInWithCustomToken(auth, data.customToken)
+                  updateSessionTimestamp()
+                }
+              }
+            } catch (loginErr) {
+              console.error("Auto-login error after verification:", loginErr)
+            }
+          }
+
+          if (auth.currentUser) {
+            await auth.currentUser.reload()
             const uid = auth.currentUser.uid
-            const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
             fetch(`${backendUrl}/sendWelcomeEmailOnVerify`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ uid })
             }).catch((e) => console.error("Welcome email trigger failed:", e))
 
-            const name = signupTempData?.name || auth.currentUser.displayName || "User"
+            const name = signupTempData?.name || auth.currentUser.displayName || auth.currentUser.email?.split("@")[0] || "User"
             const email = auth.currentUser.email || ""
-            setUser({
+            const verifiedUser = {
               name,
               email,
               phone: "",
@@ -610,42 +646,41 @@ function PageContent() {
               meterType: "",
               currentUnits: 0,
               plan: ""
-            })
+            }
+            setUser(verifiedUser)
+            if (typeof window !== "undefined") {
+              localStorage.setItem("volt_user", JSON.stringify(verifiedUser))
+            }
+            setAuthResolved(true)
+            toast.success("Email verified successfully!")
             navigateTo("onboarding")
+          } else {
+            toast.success("Email verified successfully! Please log in to continue.")
+            navigateTo("login")
           }
-        })
-        .catch((err) => {
-          console.error("Error polling verification status:", err)
-        })
-    }, 3000)
-
-    return () => clearInterval(interval)
-  }, [pageParam, signupTempData])
-
-  React.useEffect(() => {
-    const mode = searchParams.get("mode")
-    const oobCode = searchParams.get("oobCode")
-
-    if (mode === "verifyEmail" && oobCode) {
-      setIsLoading(true)
-      applyActionCode(auth, oobCode)
-        .then(async () => {
-          if (auth.currentUser) {
-            await auth.currentUser.reload()
-            const uid = auth.currentUser.uid
-            const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
-            fetch(`${backendUrl}/sendWelcomeEmailOnVerify`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ uid })
-            }).catch((e) => console.error("Welcome email trigger failed:", e))
-          }
-          toast.success("Email verified successfully!")
-          navigateTo("onboarding")
         })
         .catch((err) => {
           console.error("Action code verification failed:", err)
           if (auth.currentUser?.emailVerified) {
+            updateSessionTimestamp()
+            const name = signupTempData?.name || auth.currentUser.displayName || auth.currentUser.email?.split("@")[0] || "User"
+            const email = auth.currentUser.email || ""
+            const verifiedUser = {
+              name,
+              email,
+              phone: "",
+              meterNumber: "",
+              disco: "",
+              tariffBand: "",
+              meterType: "",
+              currentUnits: 0,
+              plan: ""
+            }
+            setUser(verifiedUser)
+            if (typeof window !== "undefined") {
+              localStorage.setItem("volt_user", JSON.stringify(verifiedUser))
+            }
+            setAuthResolved(true)
             navigateTo("onboarding")
           } else {
             toast.error("Failed to verify email link.")
@@ -655,7 +690,7 @@ function PageContent() {
           setIsLoading(false)
         })
     }
-  }, [searchParams])
+  }, [searchParams, signupTempData])
 
   React.useEffect(() => {
     if (!authResolved) return
@@ -921,11 +956,6 @@ function PageContent() {
     createUserWithEmailAndPassword(auth, email, password)
       .then((result) => {
         updateSessionTimestamp()
-        sendEmailVerification(result.user)
-          .catch((verifErr) => {
-            console.error("Verification email failed to send:", verifErr)
-          })
-        
         const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
         fetch(`${backendUrl}/createUser`, {
           method: "POST",
@@ -962,77 +992,92 @@ function PageContent() {
       })
   }
 
-  const handleVerifyOtp = () => {
+  const handleVerifyOtp = async (code: string) => {
     setIsLoading(true)
     setSignupError(null)
-    if (!auth.currentUser) {
+    const email = signupTempData?.email || auth.currentUser?.email || ""
+    const uid = auth.currentUser?.uid || ""
+
+    if (!code || code.length !== 6) {
+      setSignupError("Please enter the complete 6-digit verification code.")
       setIsLoading(false)
       return
     }
-    auth.currentUser.reload()
-      .then(() => {
-        if (auth.currentUser?.emailVerified) {
-          const uid = auth.currentUser.uid
-          const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
-          fetch(`${backendUrl}/sendWelcomeEmailOnVerify`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ uid })
-          }).catch((e) => console.error("Welcome email trigger failed:", e))
 
-          const name = signupTempData?.name || auth.currentUser.displayName || "User"
-          const email = auth.currentUser.email || ""
-          setUser({
-            name,
-            email,
-            phone: "",
-            meterNumber: "",
-            disco: "",
-            tariffBand: "",
-            meterType: "",
-            currentUnits: 0,
-            plan: ""
-          })
-          navigateTo("onboarding")
-        } else {
-          setSignupError("Please click the verification link sent to your email to verify your address.")
-        }
-      })
-      .catch((err) => {
-        console.error(err)
-        setSignupError("Failed to check verification status. Please try again.")
-      })
-      .finally(() => {
-        setIsLoading(false)
-      })
-  }
-
-  const handleResendOtp = () => {
-    if (auth.currentUser) {
-      setIsLoading(true)
+    try {
       const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
-      fetch(`${backendUrl}/resendVerificationEmail`, {
+      const res = await fetch(`${backendUrl}/verifyOtp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ uid: auth.currentUser.uid })
+        body: JSON.stringify({
+          email,
+          code,
+          uid
+        })
       })
-        .then((res) => {
-          if (!res.ok) throw new Error("Failed to resend verification email")
-          toast.success("Verification email resent successfully.")
-        })
-        .catch((err) => {
-          console.error("Backend resend failed, falling back to Firebase Auth:", err)
-          sendEmailVerification(auth.currentUser!)
-            .then(() => {
-              toast.success("Verification email resent successfully.")
-            })
-            .catch(() => {
-              toast.error("Failed to resend verification email. Please try again.")
-            })
-        })
-        .finally(() => {
-          setIsLoading(false)
-        })
+
+      const data = await res.json()
+      if (!res.ok) {
+        setSignupError(data.error || "Invalid verification code. Please check and try again.")
+        setIsLoading(false)
+        return
+      }
+
+      if (auth.currentUser) {
+        await auth.currentUser.reload()
+      }
+
+      updateSessionTimestamp()
+      const name = signupTempData?.name || auth.currentUser?.displayName || "User"
+      const verifiedUser = {
+        name,
+        email,
+        phone: "",
+        meterNumber: "",
+        disco: "",
+        tariffBand: "",
+        meterType: "",
+        currentUnits: 0,
+        plan: ""
+      }
+      setUser(verifiedUser)
+      if (typeof window !== "undefined") {
+        localStorage.setItem("volt_user", JSON.stringify(verifiedUser))
+      }
+      toast.success("Email verified successfully!")
+      navigateTo("onboarding")
+    } catch (err: any) {
+      console.error("OTP verification error:", err)
+      setSignupError(err.message || "Failed to verify code. Please try again.")
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleResendOtp = async () => {
+    const email = signupTempData?.email || auth.currentUser?.email || ""
+    const uid = auth.currentUser?.uid || ""
+    if (!email && !uid) return
+
+    setIsLoading(true)
+    setSignupError(null)
+    try {
+      const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
+      const res = await fetch(`${backendUrl}/resendVerificationOtp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uid, email })
+      })
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.error || "Failed to resend verification code")
+      }
+      toast.success("A new 6-digit verification code has been sent to your email.")
+    } catch (err: any) {
+      console.error("Failed to resend verification OTP:", err)
+      toast.error(err.message || "Failed to resend verification code. Please try again.")
+    } finally {
+      setIsLoading(false)
     }
   }
 
@@ -1077,8 +1122,12 @@ function PageContent() {
         updateSessionTimestamp()
         trackAnalyticsEvent("login", { email })
         if (!result.user.emailVerified) {
-          sendEmailVerification(result.user)
-            .catch((e) => console.error("Verification email failed to send on login:", e))
+          const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
+          fetch(`${backendUrl}/resendVerificationOtp`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ uid: result.user.uid, email: result.user.email })
+          }).catch((e) => console.error("OTP send failed on login:", e))
         }
       })
       .catch((error) => {

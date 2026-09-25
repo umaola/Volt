@@ -47,20 +47,19 @@ function getClientIp(request: any): string {
     return request.ip || request.socket?.remoteAddress || "unknown-ip";
 }
 
-async function sendVerificationEmail(name: string, email: string, verificationLink: string): Promise<{ sent: boolean; reason?: string; verificationLink?: string }> {
+async function sendVerificationOtpEmail(name: string, email: string, otp: string): Promise<{ sent: boolean; reason?: string }> {
     if (!email) return { sent: false, reason: "No email provided" };
 
-    const host = process.env.SMTP_HOST;
+    const host = process.env.SMTP_HOST || "smtp.zeptomail.com";
     const port = Number(process.env.SMTP_PORT) || 465;
-    const secure = process.env.SMTP_SECURE === "true";
+    const secure = process.env.SMTP_SECURE === "true" || port === 465;
     const user = process.env.SMTP_USER;
     const pass = process.env.SMTP_PASS;
-    const fromAddress = process.env.SMTP_FROM || user || "no-reply@voltdigitalservices.com";
+    const fromAddress = process.env.SMTP_FROM || user || "info@voltdigitalservices.com";
 
     if (!user || !pass) {
-        logger.info(`SMTP credentials not configured. Skipping verification email to ${email}`);
-        logger.info(`Verification link for ${email}: ${verificationLink}`);
-        return { sent: false, reason: "SMTP credentials not configured", verificationLink };
+        logger.info(`SMTP credentials not configured. Verification OTP for ${email}: ${otp}`);
+        return { sent: false, reason: "SMTP credentials not configured" };
     }
 
     try {
@@ -77,7 +76,7 @@ async function sendVerificationEmail(name: string, email: string, verificationLi
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Verify your email - Volt</title>
+  <title>Your Volt Verification Code</title>
 </head>
 <body style="margin:0;padding:0;background-color:#F8F9FA;font-family:'Poppins',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#121212;">
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color:#F8F9FA;padding:40px 16px;">
@@ -100,15 +99,18 @@ async function sendVerificationEmail(name: string, email: string, verificationLi
             <td style="padding:32px;">
               <h2 style="margin:0 0 16px 0;font-size:22px;font-weight:600;color:#121212;">Verify Your Email Address</h2>
               <p style="margin:0 0 20px 0;font-size:15px;line-height:1.6;color:#4B5563;">
-                Hello ${name}, thank you for registering with <strong>Volt</strong>. Please verify your email address to complete your account setup and access smart electricity insights.
+                Hello ${name || "there"}, thank you for signing up with <strong>Volt</strong>. Use the verification code below to complete your registration:
               </p>
               <div style="text-align:center;margin:32px 0;">
-                <a href="${verificationLink}" style="background-color:#00BF63;color:#FFFFFF;text-decoration:none;padding:14px 36px;border-radius:12px;font-weight:600;font-size:16px;display:inline-block;box-shadow:0 4px 12px rgba(0,191,99,0.25);">
-                  Verify Email Address &rarr;
-                </a>
+                <div style="display:inline-block;background-color:#F0FDF4;border:2px dashed #00BF63;border-radius:16px;padding:16px 36px;">
+                  <span style="font-family:'Courier New',Courier,monospace;font-size:36px;font-weight:800;letter-spacing:10px;color:#00BF63;display:inline-block;">${otp}</span>
+                </div>
               </div>
-              <p style="margin:20px 0 0 0;font-size:13px;line-height:1.6;color:#9CA3AF;">
-                If you did not create a Volt account, no further action is required.
+              <p style="margin:20px 0 0 0;font-size:13px;line-height:1.6;color:#6B7280;text-align:center;">
+                This code will expire in <strong>10 minutes</strong>. Do not share this code with anyone.
+              </p>
+              <p style="margin:20px 0 0 0;font-size:12px;line-height:1.6;color:#9CA3AF;text-align:center;">
+                If you did not request this verification code, please ignore this email.
               </p>
             </td>
           </tr>
@@ -128,16 +130,17 @@ async function sendVerificationEmail(name: string, email: string, verificationLi
         await transporter.sendMail({
             from: { name: "Volt", address: fromAddress },
             to: email,
-            subject: "Verify your email - Volt",
+            subject: `${otp} is your Volt verification code`,
             html: htmlContent
         });
-        logger.info(`Verification email sent successfully to ${email}`);
+        logger.info(`Verification OTP sent successfully to ${email}`);
         return { sent: true };
     } catch (error) {
-        logger.error(`Error sending verification email to ${email}:`, error);
+        logger.error(`Error sending verification OTP to ${email}:`, error);
         return { sent: false, reason: String(error) };
     }
 }
+
 
 async function sendWelcomeEmail(name: string, email: string): Promise<{ sent: boolean; reason?: string }> {
     if (!email) return { sent: false, reason: "No email provided" };
@@ -370,6 +373,114 @@ export const sendWelcomeEmailOnVerify = onRequest({ cors: true }, async (request
     }
 });
 
+export const loginWithVerifiedEmail = onRequest({ cors: true }, async (request, response) => {
+    try {
+        const clientIp = getClientIp(request);
+        if (!checkRateLimit(`login_verified_${clientIp}`, 10, 15 * 60 * 1000)) {
+            response.status(429).send({ error: "Too many requests. Please try again later." });
+            return;
+        }
+
+        const { email } = request.body || request.query || {};
+        if (!email) {
+            response.status(400).send({ error: "Missing required parameter: email" });
+            return;
+        }
+
+        const { getAuth } = await import("firebase-admin/auth");
+        const userRecord = await getAuth().getUserByEmail(email);
+
+        if (!userRecord) {
+            response.status(404).send({ error: "User not found" });
+            return;
+        }
+
+        if (!userRecord.emailVerified) {
+            response.status(403).send({ error: "Email is not verified yet" });
+            return;
+        }
+
+        const customToken = await getAuth().createCustomToken(userRecord.uid);
+        const userDoc = await db.collection("users").doc(userRecord.uid).get();
+        const userData = userDoc.exists ? userDoc.data() : null;
+
+        response.status(200).send({
+            success: true,
+            customToken,
+            uid: userRecord.uid,
+            email: userRecord.email,
+            name: userData?.name || userRecord.displayName || userRecord.email?.split("@")[0] || "User"
+        });
+    } catch (error) {
+        logger.error("Error in loginWithVerifiedEmail:", error);
+        response.status(500).send({ error: "Internal server error" });
+    }
+});
+
+export const verifyEmailOtp = onRequest({ cors: true }, async (request, response) => {
+    try {
+        const clientIp = getClientIp(request);
+        if (!checkRateLimit(`verify_otp_${clientIp}`, 10, 15 * 60 * 1000)) {
+            response.status(429).send({ error: "Too many verification attempts. Please try again later." });
+            return;
+        }
+
+        const { email, code, uid } = request.body || {};
+        if (!email || !code) {
+            response.status(400).send({ error: "Email and 6-digit verification code are required" });
+            return;
+        }
+
+        const cleanEmail = String(email).toLowerCase().trim();
+        const cleanCode = String(code).trim();
+
+        const docRef = db.collection("email_verifications").doc(cleanEmail);
+        const doc = await docRef.get();
+
+        if (!doc.exists) {
+            response.status(400).send({ error: "No verification code found. Please request a new code." });
+            return;
+        }
+
+        const data = doc.data();
+        if (Date.now() > (data?.expiresAt || 0)) {
+            await docRef.delete();
+            response.status(400).send({ error: "Verification code has expired. Please request a new code." });
+            return;
+        }
+
+        if (data?.code !== cleanCode) {
+            response.status(400).send({ error: "Invalid verification code. Please check and try again." });
+            return;
+        }
+
+        const targetUid = uid || data?.uid;
+        const { getAuth } = await import("firebase-admin/auth");
+        if (targetUid) {
+            await getAuth().updateUser(targetUid, { emailVerified: true });
+        } else {
+            const userRec = await getAuth().getUserByEmail(cleanEmail);
+            if (userRec) {
+                await getAuth().updateUser(userRec.uid, { emailVerified: true });
+            }
+        }
+
+        await docRef.delete();
+
+        const targetName = data?.name || "Volt User";
+        sendWelcomeEmail(targetName, cleanEmail).catch((err) => {
+            logger.error("Welcome email background error:", err);
+        });
+
+        response.status(200).send({ success: true, message: "Email verified successfully" });
+    } catch (error: any) {
+        logger.error("Error in verifyEmailOtp:", error);
+        response.status(500).send({ error: error?.message || "Internal server error" });
+    }
+});
+
+export const verifyOtp = verifyEmailOtp;
+
 export const resendVerificationEmail = onRequest({ cors: true }, async (request, response) => {
     try {
         const clientIp = getClientIp(request);
@@ -393,26 +504,28 @@ export const resendVerificationEmail = onRequest({ cors: true }, async (request,
             return;
         }
 
+        const cleanEmail = userRecord.email.toLowerCase().trim();
         const name = userRecord.displayName || "Volt User";
-        const origin = request.headers.origin || "http://localhost:3000";
-        let verificationLink = "";
-        try {
-            verificationLink = await getAuth().generateEmailVerificationLink(userRecord.email, {
-                url: `${origin}/?page=otp`
-            });
-        } catch (linkErr: any) {
-            logger.warn("generateEmailVerificationLink fallback:", linkErr?.message);
-            verificationLink = `${origin}/?page=otp&email=${encodeURIComponent(userRecord.email)}&verified=true`;
-        }
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
-        logger.info(`VERIFICATION LINK FOR ${userRecord.email}: ${verificationLink}`);
-        const result = await sendVerificationEmail(name, userRecord.email, verificationLink);
-        response.status(200).send({ success: true, verificationLink, result });
+        await db.collection("email_verifications").doc(cleanEmail).set({
+            code: otp,
+            uid: userRecord.uid,
+            email: cleanEmail,
+            name,
+            createdAt: Date.now(),
+            expiresAt: Date.now() + 10 * 60 * 1000
+        });
+
+        const result = await sendVerificationOtpEmail(name, cleanEmail, otp);
+        response.status(200).send({ success: true, sent: result.sent });
     } catch (error: any) {
         logger.error("Error in resendVerificationEmail:", error);
         response.status(500).send({ error: error?.message || "Internal server error" });
     }
 });
+
+export const resendVerificationOtp = resendVerificationEmail;
 
 export const createUser = onRequest({ cors: true }, async (request, response) => {
     try {
@@ -437,22 +550,20 @@ export const createUser = onRequest({ cors: true }, async (request, response) =>
         });
 
         if (email) {
-            let verificationLink = "";
-            try {
-                const { getAuth } = await import("firebase-admin/auth");
-                const origin = request.headers.origin || "http://localhost:3002";
-                verificationLink = await getAuth().generateEmailVerificationLink(email, {
-                    url: `${origin}/?page=otp`
-                });
-            } catch (verifErr) {
-                logger.warn("Could not generate verification link via Firebase Admin:", verifErr);
-            }
+            const cleanEmail = email.toLowerCase().trim();
+            const otp = Math.floor(100000 + Math.random() * 900000).toString();
+            await db.collection("email_verifications").doc(cleanEmail).set({
+                code: otp,
+                uid,
+                email: cleanEmail,
+                name: name || "Volt User",
+                createdAt: Date.now(),
+                expiresAt: Date.now() + 10 * 60 * 1000
+            });
 
-            if (verificationLink) {
-                sendVerificationEmail(name, email, verificationLink).catch((err) => {
-                    logger.error("Background error sending verification email:", err);
-                });
-            }
+            sendVerificationOtpEmail(name, cleanEmail, otp).catch((err) => {
+                logger.error("Background error sending verification OTP:", err);
+            });
         }
 
         response.status(200).send({ success: true });

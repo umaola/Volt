@@ -41,7 +41,7 @@ export function SignupPage({
   const [name, setName] = React.useState("")
   const [email, setEmail] = React.useState("")
   const [password, setPassword] = React.useState("")
-  const [confirmPassword, setConfirmPassword] = React.useState("")
+  const [showPassword, setShowPassword] = React.useState(false)
   const [agreed, setAgreed] = React.useState(false)
 
   const [isPasswordFocused, setIsPasswordFocused] = React.useState(false)
@@ -50,7 +50,6 @@ export function SignupPage({
     name: false,
     email: false,
     password: false,
-    confirmPassword: false,
     agreed: false
   })
 
@@ -135,17 +134,6 @@ export function SignupPage({
     return ""
   }, [password, criteria, touched.password])
 
-  const confirmPasswordError = React.useMemo(() => {
-    if (!touched.confirmPassword) return ""
-    if (confirmPassword.length === 0) {
-      return "Please confirm your password"
-    }
-    if (confirmPassword !== password) {
-      return "Passwords do not match"
-    }
-    return ""
-  }, [confirmPassword, password, touched.confirmPassword])
-
   const agreedError = React.useMemo(() => {
     if (!touched.agreed) return ""
     if (!agreed) {
@@ -160,13 +148,11 @@ export function SignupPage({
     criteria.hasCapital &&
     criteria.hasNumber &&
     criteria.hasSpecial
-  const isConfirmPasswordValid = confirmPassword === password && confirmPassword.length > 0
 
   const isFormValid =
     name.trim().length >= 2 &&
     isEmailValid &&
     isPasswordValid &&
-    isConfirmPasswordValid &&
     agreed
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -175,7 +161,6 @@ export function SignupPage({
       name: true,
       email: true,
       password: true,
-      confirmPassword: true,
       agreed: true
     })
     if (isFormValid) {
@@ -280,7 +265,7 @@ export function SignupPage({
                 <IconEye className="w-5 h-5 stroke-[1.5]" />
               </span>
               <input
-                type="password"
+                type={showPassword ? "text" : "password"}
                 placeholder="Password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -291,12 +276,25 @@ export function SignupPage({
                 }}
                 disabled={isLoading}
                 required
-                className={`w-full h-12 pl-12 pr-4 rounded-xl border text-sm text-[#121212] placeholder-zinc-300 focus:outline-none transition-colors disabled:bg-[#F3F4F6] disabled:text-[#9CA3AF] ${
+                className={`w-full h-12 pl-12 pr-12 rounded-xl border text-sm text-[#121212] placeholder-zinc-300 focus:outline-none transition-colors disabled:bg-[#F3F4F6] disabled:text-[#9CA3AF] ${
                   passwordError
                     ? "border-red-500 focus:border-red-500 focus:ring-1 focus:ring-red-500"
                     : "border-zinc-200 focus:border-primary focus:ring-1 focus:ring-primary"
                 }`}
               />
+              <button
+                type="button"
+                onClick={() => setShowPassword((prev) => !prev)}
+                className="absolute right-4 text-[#9CA3AF] hover:text-[#121212] transition-colors focus:outline-none cursor-pointer"
+                tabIndex={-1}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+              >
+                {showPassword ? (
+                  <IconEyeOff className="w-5 h-5 stroke-[1.5]" />
+                ) : (
+                  <IconEye className="w-5 h-5 stroke-[1.5]" />
+                )}
+              </button>
             </div>
             {passwordError && (
               <span className="text-xs text-red-500 mt-1 pl-1 font-medium">{passwordError}</span>
@@ -350,31 +348,6 @@ export function SignupPage({
               </div>
             </div>
           )}
-
-          <div className="flex flex-col w-full">
-            <div className="relative flex items-center w-full">
-              <span className="absolute left-4 text-[#9CA3AF]">
-                <IconEyeOff className="w-5 h-5 stroke-[1.5]" />
-              </span>
-              <input
-                type="password"
-                placeholder="Confirm password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                onBlur={() => setTouched((prev) => ({ ...prev, confirmPassword: true }))}
-                disabled={isLoading}
-                required
-                className={`w-full h-12 pl-12 pr-4 rounded-xl border text-sm text-[#121212] placeholder-zinc-300 focus:outline-none transition-colors disabled:bg-[#F3F4F6] disabled:text-[#9CA3AF] ${
-                  confirmPasswordError
-                    ? "border-red-500 focus:border-red-500 focus:ring-1 focus:ring-red-500"
-                    : "border-zinc-200 focus:border-primary focus:ring-1 focus:ring-primary"
-                }`}
-              />
-            </div>
-            {confirmPasswordError && (
-              <span className="text-xs text-red-500 mt-1 pl-1 font-medium">{confirmPasswordError}</span>
-            )}
-          </div>
 
           <div className="flex flex-col w-full gap-1">
             <label className="flex items-start gap-3 text-xs text-[#4B5563] cursor-pointer mt-2 leading-relaxed px-1">

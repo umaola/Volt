@@ -2,12 +2,15 @@
 
 import * as React from "react"
 import { IconMail } from "@tabler/icons-react"
+import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp"
+import { PrimaryButton } from "@/components/design-system/button"
+import { REGEXP_ONLY_DIGITS } from "input-otp"
 
 interface OtpPageProps {
   isLoading: boolean
   error?: string | null
   email: string
-  onVerify?: () => void
+  onVerify: (code: string) => void
   onResend: () => void
   onBack: () => void
 }
@@ -16,9 +19,11 @@ export function OtpPage({
   isLoading,
   error,
   email,
+  onVerify,
   onResend,
   onBack
 }: OtpPageProps) {
+  const [code, setCode] = React.useState("")
   const [countdown, setCountdown] = React.useState(30)
 
   React.useEffect(() => {
@@ -35,6 +40,12 @@ export function OtpPage({
     }
   }
 
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (code.length === 6 && !isLoading) {
+      onVerify(code)
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in">
@@ -47,31 +58,49 @@ export function OtpPage({
           <div className="flex flex-col gap-1.5">
             <h2 className="text-2xl font-bold text-zinc-900 tracking-tight">Verify your email</h2>
             <p className="text-sm text-zinc-500 font-medium px-2 leading-relaxed">
-              Click the link sent to <span className="font-semibold text-zinc-800">{email}</span> to verify your account.
+              Enter the 6-digit code sent to <span className="font-semibold text-zinc-800">{email}</span>
             </p>
           </div>
         </div>
 
-        <div className="flex flex-col gap-4">
+        <form onSubmit={handleSubmit} className="flex flex-col gap-5">
           {error && (
             <div className="p-3.5 bg-red-50 border border-red-200 rounded-xl text-xs text-red-800 font-semibold animate-fade-in text-center">
               {error}
             </div>
           )}
 
-          <div className="flex items-center justify-center gap-2.5 py-3 px-4 bg-emerald-50/80 border border-emerald-200/60 rounded-2xl text-xs font-semibold text-emerald-800">
-            <span className="relative flex h-2.5 w-2.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
-            </span>
-            <span>Waiting for link verification...</span>
+          <div className="flex justify-center w-full my-1">
+            <InputOTP
+              maxLength={6}
+              value={code}
+              onChange={setCode}
+              pattern={REGEXP_ONLY_DIGITS}
+              disabled={isLoading}
+            >
+              <InputOTPGroup className="gap-2">
+                <InputOTPSlot index={0} className="w-11 h-12 text-lg font-bold text-[#121212] rounded-xl border border-zinc-200 bg-zinc-50/50" />
+                <InputOTPSlot index={1} className="w-11 h-12 text-lg font-bold text-[#121212] rounded-xl border border-zinc-200 bg-zinc-50/50" />
+                <InputOTPSlot index={2} className="w-11 h-12 text-lg font-bold text-[#121212] rounded-xl border border-zinc-200 bg-zinc-50/50" />
+                <InputOTPSlot index={3} className="w-11 h-12 text-lg font-bold text-[#121212] rounded-xl border border-zinc-200 bg-zinc-50/50" />
+                <InputOTPSlot index={4} className="w-11 h-12 text-lg font-bold text-[#121212] rounded-xl border border-zinc-200 bg-zinc-50/50" />
+                <InputOTPSlot index={5} className="w-11 h-12 text-lg font-bold text-[#121212] rounded-xl border border-zinc-200 bg-zinc-50/50" />
+              </InputOTPGroup>
+            </InputOTP>
           </div>
-        </div>
 
+          <PrimaryButton
+            type="submit"
+            disabled={code.length !== 6 || isLoading}
+            isLoading={isLoading}
+          >
+            Verify Code
+          </PrimaryButton>
+        </form>
 
         <div className="flex flex-col gap-3 items-center text-xs">
           <div className="text-zinc-500">
-            Didn't receive the email?{" "}
+            Didn't receive the code?{" "}
             {countdown > 0 ? (
               <span className="font-semibold text-zinc-400">
                 Resend in {countdown}s
@@ -83,7 +112,7 @@ export function OtpPage({
                 className="font-bold text-[#EAB308] hover:underline transition-all cursor-pointer"
                 disabled={isLoading}
               >
-                Resend Email
+                Resend Code
               </button>
             )}
           </div>
@@ -102,3 +131,4 @@ export function OtpPage({
     </div>
   )
 }
+
