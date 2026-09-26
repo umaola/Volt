@@ -190,7 +190,6 @@ export function SignupPage({
 
         <div className="flex flex-col items-center gap-1.5 text-center mt-2">
           <h1 className="text-[28px] font-bold text-[#052e16] tracking-tight">Sign up</h1>
-          <p className="text-sm text-[#4B5563] font-medium">Enter required details</p>
         </div>
 
         <form onSubmit={handleSubmit} className="w-full flex flex-col gap-4 mt-2">
