@@ -71,7 +71,6 @@ export function ProfilePage({
   const [isVerifying, setIsVerifying] = React.useState(false)
   const [verificationError, setVerificationError] = React.useState<string | null>(null)
   const [mounted, setMounted] = React.useState(false)
-  const [showCancelConfirm, setShowCancelConfirm] = React.useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = React.useState(false)
   const [isDeleting, setIsDeleting] = React.useState(false)
 
@@ -430,101 +429,6 @@ export function ProfilePage({
           </div>
         </StandardCard>
 
-        <StandardCard className="flex flex-col gap-3 bg-emerald-50/20 border-emerald-100/50">
-          <div className="flex items-center gap-2 border-b border-zinc-100/50 pb-2">
-            <IconShieldLock className="w-5 h-5 text-primary" />
-            <span className="text-xs font-bold uppercase tracking-wider text-[#121212]">Subscription</span>
-          </div>
-          
-          {(() => {
-            const sub = userData.subscription || { planType: "Free Trial", status: "trialing", endDate: "2026-06-24T12:00:00.000Z" }
-            const calculateDaysLeft = (endDateStr: string) => {
-              if (!mounted) return 12
-              try {
-                const end = new Date(endDateStr).getTime()
-                const now = Date.now()
-                const diffMs = end - now
-                const days = Math.ceil(diffMs / (1000 * 60 * 60 * 24))
-                return days > 0 ? days : 0
-              } catch {
-                return 0
-              }
-            }
-            const daysLeft = calculateDaysLeft(sub.endDate)
-            const formatEnd = (endDateStr: string) => {
-              if (!mounted) return "Jun 24, 2026"
-              try {
-                return new Date(endDateStr).toLocaleDateString("en-NG", { year: "numeric", month: "short", day: "numeric" })
-              } catch {
-                return endDateStr
-              }
-            }
-            return (
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-[#4B5563]">Current Plan:</span>
-                  <span className="font-bold text-primary uppercase tracking-wider">{sub.planType}</span>
-                </div>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-[#4B5563]">Status:</span>
-                  <span className={`font-bold uppercase text-[10px] px-2 py-0.5 rounded-full ${
-                    sub.status === "active" ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
-                  }`}>
-                    {sub.status}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-[#4B5563]">
-                    {sub.status === "active" ? "Next Renewal:" : "Expiration Date:"}
-                  </span>
-                  <span className="font-bold text-[#121212]">
-                    {formatEnd(sub.endDate)} ({daysLeft} days left)
-                  </span>
-                </div>
-
-                {onCancelSubscription && (sub.status === "trialing" || sub.status === "active" || sub.status === "past_due") && (
-                  <div className="mt-3 pt-3 border-t border-zinc-100/50 flex flex-col gap-2">
-                    {showCancelConfirm ? (
-                      <div className="flex flex-col gap-2 bg-red-50/50 border border-red-100/80 p-3 rounded-lg">
-                        <p className="text-[11px] text-red-800 leading-normal">
-                          Are you sure you want to cancel your premium subscription? You will still keep access until your trial/cycle ends on {formatEnd(sub.endDate)}.
-                        </p>
-                        <div className="flex items-center gap-2 mt-1">
-                          <button
-                            type="button"
-                            onClick={() => setShowCancelConfirm(false)}
-                            className="px-3 py-1.5 rounded-md border border-zinc-200 text-zinc-600 text-xs font-semibold cursor-pointer"
-                          >
-                            No, Keep It
-                          </button>
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              await onCancelSubscription();
-                              setShowCancelConfirm(false);
-                            }}
-                            disabled={isCancelling}
-                            className="px-3 py-1.5 rounded-md bg-red-600 text-white text-xs font-semibold hover:bg-red-700 disabled:opacity-50 cursor-pointer"
-                          >
-                            {isCancelling ? "Cancelling..." : "Yes, Cancel"}
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setShowCancelConfirm(true)}
-                        className="w-full h-9 rounded-lg border border-red-200 hover:bg-red-50/40 text-red-600 text-xs font-semibold transition-colors cursor-pointer"
-                      >
-                        Cancel Subscription
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            )
-          })()}
-        </StandardCard>
 
         <div className="flex flex-col items-center gap-3 mt-2 mb-6">
           <button
@@ -552,7 +456,7 @@ export function ProfilePage({
               <div className="text-center flex flex-col gap-1.5">
                 <h3 className="text-base font-bold text-[#121212]">Delete Account & Data</h3>
                 <p className="text-xs text-[#4B5563] leading-relaxed">
-                  Are you sure you want to permanently delete your account? All your meter profiles, recharge history, appliances, and subscriptions will be deleted. This action cannot be undone.
+                  Are you sure you want to permanently delete your account? All your meter profiles, recharge history, and appliances will be deleted. This action cannot be undone.
                 </p>
               </div>
               <div className="flex items-center gap-3 pt-2">

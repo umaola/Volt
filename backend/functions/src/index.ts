@@ -67,15 +67,8 @@ async function sendVerificationOtpEmail(name: string, email: string, otp: string
       <td align="center">
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;background-color:#FFFFFF;border-radius:16px;border:1px solid #E5E7EB;overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,0.06);">
           <tr>
-            <td style="padding:28px 32px;background-color:#121212;border-bottom:3px solid #00BF63;text-align:center;">
-              <table role="presentation" align="center" cellspacing="0" cellpadding="0">
-                <tr>
-                  <td style="background-color:#00BF63;border-radius:8px;padding:6px 12px;display:inline-block;">
-                    <span style="font-size:20px;font-weight:800;color:#FFFFFF;letter-spacing:-0.5px;">⚡ VOLT</span>
-                  </td>
-                </tr>
-              </table>
-              <p style="margin:8px 0 0 0;font-size:13px;color:#9CA3AF;font-weight:400;">Smart Electricity Tracking & Management</p>
+            <td style="padding:28px 32px;background-color:#00BF63;text-align:center;">
+              <img src="https://volt-test-e8e0b.web.app/logo-white.png" alt="Volt" width="120" style="display:block;margin:0 auto;height:auto;max-width:120px;border:0;" />
             </td>
           </tr>
           <tr>
@@ -211,20 +204,13 @@ async function sendWelcomeEmail(name: string, email: string): Promise<{ sent: bo
       <td align="center">
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;background-color:#FFFFFF;border-radius:16px;border:1px solid #E5E7EB;overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,0.06);">
           <tr>
-            <td style="padding:28px 32px;background-color:#121212;border-bottom:3px solid #00BF63;text-align:center;">
-              <table role="presentation" align="center" cellspacing="0" cellpadding="0">
-                <tr>
-                  <td style="background-color:#00BF63;border-radius:8px;padding:6px 12px;display:inline-block;">
-                    <span style="font-size:20px;font-weight:800;color:#FFFFFF;letter-spacing:-0.5px;">⚡ VOLT</span>
-                  </td>
-                </tr>
-              </table>
-              <p style="margin:8px 0 0 0;font-size:13px;color:#9CA3AF;font-weight:400;">Smart Electricity Tracking & Management</p>
+            <td style="padding:28px 32px;background-color:#00BF63;text-align:center;">
+              <img src="https://volt-test-e8e0b.web.app/logo-white.png" alt="Volt" width="120" style="display:block;margin:0 auto;height:auto;max-width:120px;border:0;" />
             </td>
           </tr>
           <tr>
             <td style="padding:32px;">
-              <h2 style="margin:0 0 16px 0;font-size:22px;font-weight:600;color:#121212;">Welcome to Volt, ${name}! 🎉</h2>
+              <h2 style="margin:0 0 16px 0;font-size:22px;font-weight:600;color:#121212;">Welcome to Volt, ${name}!</h2>
               <p style="margin:0 0 20px 0;font-size:15px;line-height:1.6;color:#4B5563;">
                 We are thrilled to have you on board. Volt makes managing your electricity units, tracking home usage, and optimizing power tariffs effortless and precise.
               </p>
@@ -3912,15 +3898,8 @@ async function sendTokenEmail(
       <td align="center">
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;background-color:#FFFFFF;border-radius:16px;border:1px solid #E5E7EB;overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,0.06);">
           <tr>
-            <td style="padding:28px 32px;background-color:#121212;border-bottom:3px solid #00BF63;text-align:center;">
-              <table role="presentation" align="center" cellspacing="0" cellpadding="0">
-                <tr>
-                  <td style="background-color:#00BF63;border-radius:8px;padding:6px 12px;display:inline-block;">
-                    <span style="font-size:20px;font-weight:800;color:#FFFFFF;letter-spacing:-0.5px;">⚡ VOLT</span>
-                  </td>
-                </tr>
-              </table>
-              <p style="margin:8px 0 0 0;font-size:13px;color:#9CA3AF;font-weight:400;">Electricity Token Vending Receipt</p>
+            <td style="padding:28px 32px;background-color:#00BF63;text-align:center;">
+              <img src="https://volt-test-e8e0b.web.app/logo-white.png" alt="Volt" width="120" style="display:block;margin:0 auto;height:auto;max-width:120px;border:0;" />
             </td>
           </tr>
           <tr>
@@ -3970,7 +3949,7 @@ async function sendTokenEmail(
         await transporter.sendMail({
             from: `"Volt Energy" <${fromAddress}>`,
             to: email,
-            subject: `⚡ Your 20-Digit Token: ${formattedToken} | Volt`,
+            subject: `Your 20-Digit Token: ${formattedToken} | Volt`,
             html: htmlContent
         });
 

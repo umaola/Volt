@@ -707,17 +707,13 @@ function PageContent() {
         if (pageParam !== "onboarding") {
           navigateTo("onboarding")
         }
-      } else if (!user.plan) {
-        if (pageParam !== "subscription" && pageParam !== "subscription-callback") {
-          navigateTo("subscription")
-        }
       } else {
         if (["splash", "login", "signup", "otp", "onboarding", "subscription", "subscription-callback"].includes(pageParam)) {
           navigateTo("dashboard")
         }
       }
     }
-  }, [authResolved, user?.meterNumber, user?.plan, pageParam])
+  }, [authResolved, user?.meterNumber, pageParam])
 
 
   React.useEffect(() => {
@@ -1215,7 +1211,7 @@ function PageContent() {
             currentUnits: data.currentUnits
           })
         }
-        navigateTo("subscription")
+        navigateTo("dashboard")
       })
       .catch((err) => {
         console.error(err)
@@ -1229,7 +1225,7 @@ function PageContent() {
             currentUnits: data.currentUnits
           })
         }
-        navigateTo("subscription")
+        navigateTo("dashboard")
       })
       .finally(() => {
         setIsLoading(false)
@@ -2018,8 +2014,6 @@ function PageContent() {
             onVerifyMeter={handleVerifyMeter}
             isLoading={isDashboardLoading || !dashboardData}
             isSubmitting={isSubmitting}
-            onCancelSubscription={handleCancelSubscription}
-            isCancelling={isCancelling}
             onDeleteAccount={async () => {
               try {
                 if (!auth.currentUser) return
