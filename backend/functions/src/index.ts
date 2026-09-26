@@ -4037,7 +4037,8 @@ export const buyElectricityUnits = onRequest({ cors: true }, async (request, res
         const typeStr = (meterType || "prepaid").toLowerCase();
         const requestId = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
-        const vtpassUrl = "https://sandbox.vtpass.com/api/pay";
+        const isLive = process.env.VTPASS_ENV === "live" || process.env.NODE_ENV === "production";
+        const vtpassUrl = isLive ? "https://vtpass.com/api/pay" : "https://sandbox.vtpass.com/api/pay";
         const authHeaders: Record<string, string> = {
             "Content-Type": "application/json",
             "api-key": apiKey,
