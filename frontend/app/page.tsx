@@ -18,6 +18,7 @@ import { SurgeChecklistPage } from "@/components/pages/surge-checklist-page"
 import { TermsPage } from "@/components/pages/terms-page"
 import { PrivacyPage } from "@/components/pages/privacy-page"
 import { PurchaseUnitsModal } from "@/components/pages/purchase-units"
+import { UnitPurchaseCallbackPage } from "@/components/pages/unit-purchase-callback-page"
 import { BottomNavigation, TabType } from "@/components/design-system/bottom-navigation"
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail, onAuthStateChanged, signOut, applyActionCode, checkActionCode, signInWithCustomToken } from "firebase/auth"
 import { auth, getFcmToken, onMessageListener } from "@/lib/firebase"
@@ -696,7 +697,7 @@ function PageContent() {
     if (!authResolved) return
 
     if (!user) {
-      if (!["splash", "signup", "login", "otp", "terms", "privacy"].includes(pageParam)) {
+      if (!["splash", "signup", "login", "otp", "terms", "privacy", "unit-purchase-callback"].includes(pageParam)) {
         navigateTo("login")
       }
     } else {
@@ -905,6 +906,69 @@ function PageContent() {
         })
     }
   }, [pageParam, searchParams, user, authResolved])
+
+  const [purchaseCallbackResult, setPurchaseCallbackResult] = React.useState<{
+    token: string
+    units: number
+    amount: number
+    meterNumber: string
+    disco: string
+    customerName: string
+  } | null>(null)
+  const [isPurchaseCallbackLoading, setIsPurchaseCallbackLoading] = React.useState(false)
+  const [purchaseCallbackError, setPurchaseCallbackError] = React.useState<string | null>(null)
+
+  const handleVerifyUnitPurchase = React.useCallback((reference: string) => {
+    setIsPurchaseCallbackLoading(true)
+    setPurchaseCallbackError(null)
+
+    const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
+    fetch(`${backendUrl}/verifyAndVendUnits`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reference })
+    })
+      .then(async (res) => {
+        const data = await res.json().catch(() => null)
+        if (!res.ok || !data?.success || !data?.token) {
+          throw new Error(data?.error || "Token vending failed after payment settlement.")
+        }
+        return data
+      })
+      .then((data) => {
+        const result = {
+          token: data.token,
+          units: data.units || 0,
+          amount: data.amount,
+          meterNumber: data.meterNumber,
+          disco: data.disco,
+          customerName: data.customerName || "Valued Customer",
+          isThirdParty: Boolean(data.isThirdParty)
+        }
+        handlePurchaseUnitsSuccess(result)
+        setPurchaseCallbackResult(result)
+        toast.success("Electricity units vended successfully!")
+      })
+      .catch((err: any) => {
+        console.error("unit-purchase-callback error:", err)
+        setPurchaseCallbackError(err.message || "Failed to vend electricity token.")
+      })
+      .finally(() => {
+        setIsPurchaseCallbackLoading(false)
+      })
+  }, [handlePurchaseUnitsSuccess])
+
+  React.useEffect(() => {
+    if (pageParam === "unit-purchase-callback") {
+      const reference = searchParams.get("reference")
+      if (!reference) {
+        toast.error("Invalid purchase reference.")
+        navigateTo("dashboard")
+        return
+      }
+      handleVerifyUnitPurchase(reference)
+    }
+  }, [pageParam, searchParams, handleVerifyUnitPurchase])
 
   React.useEffect(() => {
     if (pageParam === "dashboard" && dashboardData && user?.meterNumber) {
@@ -1876,6 +1940,18 @@ function PageContent() {
               <p className="text-xs text-[#4B5563]">Processing secure authorization with Paystack...</p>
             </div>
           </div>
+        )}
+        {pageParam === "unit-purchase-callback" && (
+          <UnitPurchaseCallbackPage
+            isLoading={isPurchaseCallbackLoading}
+            error={purchaseCallbackError}
+            result={purchaseCallbackResult}
+            onDone={() => navigateTo("dashboard")}
+            onRetry={() => {
+              const reference = searchParams.get("reference")
+              if (reference) handleVerifyUnitPurchase(reference)
+            }}
+          />
         )}
         {pageParam === "surge-checklist" && (
           <SurgeChecklistPage onBack={handleBack} />

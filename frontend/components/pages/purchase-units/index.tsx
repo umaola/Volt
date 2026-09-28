@@ -221,8 +221,16 @@ export function PurchaseUnitsModal({
           toast.error(verifyData?.error || "Unit vending failed after payment settlement.")
         }
       } else {
-        // Real Paystack redirect / popup
+        const isMobile = typeof navigator !== "undefined" && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)
+        if (isMobile) {
+          window.location.href = authorization_url
+          return
+        }
         const payWindow = window.open(authorization_url, "_blank", "width=500,height=700")
+        if (!payWindow) {
+          window.location.href = authorization_url
+          return
+        }
         const checkTimer = setInterval(async () => {
           if (payWindow && payWindow.closed) {
             clearInterval(checkTimer)
