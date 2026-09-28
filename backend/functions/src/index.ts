@@ -69,7 +69,7 @@ async function sendVerificationOtpEmail(name: string, email: string, otp: string
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;background-color:#FFFFFF;border-radius:16px;border:1px solid #E5E7EB;overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,0.06);">
           <tr>
             <td style="padding:28px 32px;background-color:#00BF63;text-align:center;">
-              <img src="https://volt-test-e8e0b.web.app/logo-white.png" alt="Volt" width="120" style="display:block;margin:0 auto;height:auto;max-width:120px;border:0;" />
+              <img src="https://volt-94f9f.web.app/logo-white.png" alt="Volt" width="120" style="display:block;margin:0 auto;height:auto;max-width:120px;border:0;" />
             </td>
           </tr>
           <tr>
@@ -107,8 +107,11 @@ async function sendVerificationOtpEmail(name: string, email: string, otp: string
     if (zeptoToken) {
         try {
             const authHeader = zeptoToken.startsWith("Zoho-enczapikey ") ? zeptoToken : `Zoho-enczapikey ${zeptoToken}`;
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 8000);
             const res = await fetch("https://api.zeptomail.com/v1.1/email", {
                 method: "POST",
+                signal: controller.signal,
                 headers: {
                     "Accept": "application/json",
                     "Content-Type": "application/json",
@@ -121,6 +124,7 @@ async function sendVerificationOtpEmail(name: string, email: string, otp: string
                     htmlbody: htmlContent
                 })
             });
+            clearTimeout(timeoutId);
 
             if (res.ok) {
                 logger.info(`Verification OTP sent via ZeptoMail API to ${email}`);
@@ -150,6 +154,9 @@ async function sendVerificationOtpEmail(name: string, email: string, otp: string
             host,
             port,
             secure,
+            connectionTimeout: 5000,
+            greetingTimeout: 5000,
+            socketTimeout: 8000,
             auth: { user, pass }
         });
 
@@ -206,7 +213,7 @@ async function sendWelcomeEmail(name: string, email: string): Promise<{ sent: bo
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;background-color:#FFFFFF;border-radius:16px;border:1px solid #E5E7EB;overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,0.06);">
           <tr>
             <td style="padding:28px 32px;background-color:#00BF63;text-align:center;">
-              <img src="https://volt-test-e8e0b.web.app/logo-white.png" alt="Volt" width="120" style="display:block;margin:0 auto;height:auto;max-width:120px;border:0;" />
+              <img src="https://volt-94f9f.web.app/logo-white.png" alt="Volt" width="120" style="display:block;margin:0 auto;height:auto;max-width:120px;border:0;" />
             </td>
           </tr>
           <tr>
@@ -444,14 +451,36 @@ export const verifyEmailOtp = onRequest({ cors: true }, async (request, response
             return;
         }
 
-        const { email, code, uid } = request.body || {};
-        if (!email || !code) {
-            response.status(400).send({ error: "Email and 5-digit verification code are required" });
+        const { email, code, uid } = request.body || request.query || {};
+        let cleanEmail = email ? String(email).toLowerCase().trim() : "";
+        const cleanCode = code ? String(code).trim() : "";
+
+        if (!cleanEmail && uid) {
+            try {
+                const userDoc = await db.collection("users").doc(uid).get();
+                if (userDoc.exists && userDoc.data()?.email) {
+                    cleanEmail = String(userDoc.data()!.email).toLowerCase().trim();
+                } else {
+                    const { getAuth } = await import("firebase-admin/auth");
+                    const userRec = await getAuth().getUser(uid);
+                    if (userRec?.email) cleanEmail = userRec.email.toLowerCase().trim();
+                }
+            } catch (e) {}
+        }
+
+        if (!cleanEmail) {
+            response.status(400).send({ error: "Email is required to verify code." });
             return;
         }
 
-        const cleanEmail = String(email).toLowerCase().trim();
-        const cleanCode = String(code).trim();
+        try {
+            const { getAuth } = await import("firebase-admin/auth");
+            const userRec = await getAuth().getUserByEmail(cleanEmail);
+            if (userRec?.emailVerified) {
+                response.status(200).send({ success: true, verified: true });
+                return;
+            }
+        } catch (e) {}
 
         let data: { code: string; uid?: string; email?: string; name?: string; expiresAt?: number } | undefined;
 
@@ -3949,7 +3978,7 @@ async function sendTokenEmail(
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:600px;background-color:#FFFFFF;border-radius:16px;border:1px solid #E5E7EB;overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,0.06);">
           <tr>
             <td style="padding:28px 32px;background-color:#00BF63;text-align:center;">
-              <img src="https://volt-test-e8e0b.web.app/logo-white.png" alt="Volt" width="120" style="display:block;margin:0 auto;height:auto;max-width:120px;border:0;" />
+              <img src="https://volt-94f9f.web.app/logo-white.png" alt="Volt" width="120" style="display:block;margin:0 auto;height:auto;max-width:120px;border:0;" />
             </td>
           </tr>
           <tr>

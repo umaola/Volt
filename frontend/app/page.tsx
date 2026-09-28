@@ -971,11 +971,18 @@ function PageContent() {
           if (!res.ok) {
             const errData = await res.json().catch(() => ({}))
             console.error("Backend createUser sync error:", errData)
+            setSignupError(errData.error || "Failed to initialize verification code. Please try again.")
+            setIsLoading(false)
+            return
           }
-        } catch (err) {
+        } catch (err: any) {
           console.error("Backend createUser sync failed:", err)
+          setSignupError(err?.message || "Failed to contact verification server. Please try again.")
+          setIsLoading(false)
+          return
         }
         trackAnalyticsEvent("signup", { name, email })
+        setIsLoading(false)
         navigateTo("otp")
       })
       .catch((error) => {

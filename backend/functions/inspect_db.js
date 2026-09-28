@@ -3,7 +3,7 @@ const admin = require("firebase-admin");
 process.env.FIRESTORE_EMULATOR_HOST = "127.0.0.1:8080";
 
 admin.initializeApp({
-  projectId: "volt-test-e8e0b"
+  projectId: "volt-94f9f"
 });
 
 const db = admin.firestore();
