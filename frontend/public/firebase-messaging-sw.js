@@ -3,9 +3,9 @@ importScripts("https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-comp
 
 firebase.initializeApp({
   apiKey: "AIzaSyC7Qyb6hVrX4t8iMadEl4WIC94hPQiuvwI",
-  authDomain: "volt-94f9f.firebaseapp.com",
-  projectId: "volt-94f9f",
-  storageBucket: "volt-94f9f.firebasestorage.app",
+  authDomain: "volt-test-e8e0b.firebaseapp.com",
+  projectId: "volt-test-e8e0b",
+  storageBucket: "volt-test-e8e0b.firebasestorage.app",
   messagingSenderId: "370469332401",
   appId: "1:370469332401:web:6ed1e408b07cf9cdcb8990"
 });

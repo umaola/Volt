@@ -950,31 +950,33 @@ function PageContent() {
     const { name, email, password } = signupData
 
     createUserWithEmailAndPassword(auth, email, password)
-      .then((result) => {
+      .then(async (result) => {
         updateSessionTimestamp()
-        const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
-        fetch(`${backendUrl}/createUser`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            uid: result.user.uid,
-            name,
-            email,
-            phone: ""
+        try {
+          const idToken = await result.user.getIdToken()
+          const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
+          const res = await fetch(`${backendUrl}/createUser`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${idToken}`
+            },
+            body: JSON.stringify({
+              uid: result.user.uid,
+              name,
+              email,
+              phone: ""
+            })
           })
-        })
-          .then(() => {
-            trackAnalyticsEvent("signup", { name, email })
-            navigateTo("otp")
-          })
-          .catch((err) => {
-            console.error("Backend createUser sync failed:", err)
-            trackAnalyticsEvent("signup", { name, email, syncError: true })
-            navigateTo("otp")
-          })
-          .finally(() => {
-            setIsLoading(false)
-          })
+          if (!res.ok) {
+            const errData = await res.json().catch(() => ({}))
+            console.error("Backend createUser sync error:", errData)
+          }
+        } catch (err) {
+          console.error("Backend createUser sync failed:", err)
+        }
+        trackAnalyticsEvent("signup", { name, email })
+        navigateTo("otp")
       })
       .catch((error) => {
         console.error("Signup failed:", error)
@@ -1058,10 +1060,19 @@ function PageContent() {
     setIsLoading(true)
     setSignupError(null)
     try {
+      let token = ""
+      try {
+        if (auth.currentUser) {
+          token = await auth.currentUser.getIdToken()
+        }
+      } catch {}
       const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
       const res = await fetch(`${backendUrl}/resendVerificationOtp`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { "Authorization": `Bearer ${token}` } : {})
+        },
         body: JSON.stringify({ uid, email })
       })
       if (!res.ok) {

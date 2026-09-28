@@ -20,6 +20,7 @@ const ENCRYPTION_KEY = (process.env.ENCRYPTION_KEY || "volt_default_secret_key_3
 const IV_LENGTH = 16;
 
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
+const inMemoryOtpStore = new Map<string, { code: string; uid: string; email: string; name: string; expiresAt: number }>();
 
 function checkRateLimit(key: string, limit = 5, windowMs = 5 * 60 * 1000): boolean {
 
@@ -452,17 +453,32 @@ export const verifyEmailOtp = onRequest({ cors: true }, async (request, response
         const cleanEmail = String(email).toLowerCase().trim();
         const cleanCode = String(code).trim();
 
-        const docRef = db.collection("email_verifications").doc(cleanEmail);
-        const doc = await docRef.get();
+        let data: { code: string; uid?: string; email?: string; name?: string; expiresAt?: number } | undefined;
 
-        if (!doc.exists) {
+        try {
+            const docRef = db.collection("email_verifications").doc(cleanEmail);
+            const doc = await docRef.get();
+            if (doc.exists) {
+                data = doc.data() as any;
+            }
+        } catch (dbErr) {
+            logger.warn("Firestore email_verifications read failed, checking fallback:", dbErr);
+        }
+
+        if (!data) {
+            data = inMemoryOtpStore.get(cleanEmail);
+        }
+
+        if (!data) {
             response.status(400).send({ error: "No verification code found. Please request a new code." });
             return;
         }
 
-        const data = doc.data();
         if (Date.now() > (data?.expiresAt || 0)) {
-            await docRef.delete();
+            inMemoryOtpStore.delete(cleanEmail);
+            try {
+                await db.collection("email_verifications").doc(cleanEmail).delete();
+            } catch (e) {}
             response.status(400).send({ error: "Verification code has expired. Please request a new code." });
             return;
         }
@@ -471,6 +487,11 @@ export const verifyEmailOtp = onRequest({ cors: true }, async (request, response
             response.status(400).send({ error: "Invalid verification code. Please check and try again." });
             return;
         }
+
+        inMemoryOtpStore.delete(cleanEmail);
+        try {
+            await db.collection("email_verifications").doc(cleanEmail).delete();
+        } catch (e) {}
 
         const targetUid = uid || data?.uid;
         if (targetUid) {
@@ -497,8 +518,6 @@ export const verifyEmailOtp = onRequest({ cors: true }, async (request, response
                 logger.warn("Auth Admin getUserByEmail fallback:", authErr);
             }
         }
-
-        await docRef.delete();
 
         const targetName = data?.name || "Volt User";
         sendWelcomeEmail(targetName, cleanEmail).catch((err) => {
@@ -569,15 +588,28 @@ export const resendVerificationEmail = onRequest({ cors: true }, async (request,
         }
 
         const otp = Math.floor(10000 + Math.random() * 90000).toString();
+        const expiresAt = Date.now() + 10 * 60 * 1000;
 
-        await db.collection("email_verifications").doc(cleanEmail).set({
+        inMemoryOtpStore.set(cleanEmail, {
             code: otp,
             uid: targetUid || "",
             email: cleanEmail,
             name,
-            createdAt: Date.now(),
-            expiresAt: Date.now() + 10 * 60 * 1000
+            expiresAt
         });
+
+        try {
+            await db.collection("email_verifications").doc(cleanEmail).set({
+                code: otp,
+                uid: targetUid || "",
+                email: cleanEmail,
+                name,
+                createdAt: Date.now(),
+                expiresAt
+            });
+        } catch (dbErr) {
+            logger.warn("Firestore email_verifications write failed in resendVerificationEmail, using in-memory store:", dbErr);
+        }
 
         const result = await sendVerificationOtpEmail(name, cleanEmail, otp);
         response.status(200).send({ success: true, sent: result.sent });
@@ -600,35 +632,53 @@ export const createUser = onRequest({ cors: true }, async (request, response) =>
 
         if (!(await verifyUserAuthAndIdor(request, response, uid))) return;
 
-        const userRef = db.collection("users").doc(uid);
-        await userRef.set({
-            uid,
-            name,
-            email: email || "",
-            phone: phone || "",
-            is_active: true,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-        });
+        try {
+            const userRef = db.collection("users").doc(uid);
+            await userRef.set({
+                uid,
+                name,
+                email: email || "",
+                phone: phone || "",
+                is_active: true,
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+            });
+        } catch (dbErr) {
+            logger.warn("Firestore createUser write failed:", dbErr);
+        }
 
+        let emailSent = false;
         if (email) {
             const cleanEmail = email.toLowerCase().trim();
             const otp = Math.floor(10000 + Math.random() * 90000).toString();
-            await db.collection("email_verifications").doc(cleanEmail).set({
+            const expiresAt = Date.now() + 10 * 60 * 1000;
+
+            inMemoryOtpStore.set(cleanEmail, {
                 code: otp,
                 uid,
                 email: cleanEmail,
                 name: name || "Volt User",
-                createdAt: Date.now(),
-                expiresAt: Date.now() + 10 * 60 * 1000
+                expiresAt
             });
 
-            sendVerificationOtpEmail(name, cleanEmail, otp).catch((err) => {
-                logger.error("Background error sending verification OTP:", err);
-            });
+            try {
+                await db.collection("email_verifications").doc(cleanEmail).set({
+                    code: otp,
+                    uid,
+                    email: cleanEmail,
+                    name: name || "Volt User",
+                    createdAt: Date.now(),
+                    expiresAt
+                });
+            } catch (dbErr) {
+                logger.warn("Firestore email_verifications write failed in createUser, using in-memory store:", dbErr);
+            }
+
+            const sendResult = await sendVerificationOtpEmail(name, cleanEmail, otp);
+            emailSent = !!sendResult.sent;
         }
 
-        response.status(200).send({ success: true });
+        response.status(200).send({ success: true, emailSent });
     } catch (error) {
         logger.error("Error creating user:", error);
         response.status(500).send({ error: "Internal server error" });
