@@ -68,22 +68,39 @@ export function PurchaseUnitsModal({
   } | null>(null)
 
   React.useEffect(() => {
+    setIsVerifying(false)
+    setVerificationError(null)
     if (targetType === "my_meter") {
       setMeterNumber(currentUserMeter || "")
       setDisco(currentUserDisco || "IKEDC")
       setTariffBand(currentUserTariffBand || "Band A")
       setMeterType(currentUserMeterType || "Prepaid")
       setVerifiedName("")
-      setVerificationError(null)
     } else {
       setMeterNumber("")
       setVerifiedName("")
-      setVerificationError(null)
     }
   }, [targetType, currentUserMeter, currentUserDisco, currentUserTariffBand, currentUserMeterType])
 
   React.useEffect(() => {
-    if (targetType === "my_meter") return
+    if (isOpen) {
+      setIsVerifying(false)
+      setVerificationError(null)
+      if (targetType === "my_meter") {
+        setMeterNumber(currentUserMeter || "")
+        setDisco(currentUserDisco || "IKEDC")
+        setTariffBand(currentUserTariffBand || "Band A")
+        setMeterType(currentUserMeterType || "Prepaid")
+      }
+    }
+  }, [isOpen, targetType, currentUserMeter, currentUserDisco, currentUserTariffBand, currentUserMeterType])
+
+  React.useEffect(() => {
+    if (targetType === "my_meter") {
+      setIsVerifying(false)
+      setVerificationError(null)
+      return
+    }
 
     const cleanMeter = meterNumber.trim()
     if (cleanMeter.length >= 10 && disco && meterType) {
@@ -110,12 +127,18 @@ export function PurchaseUnitsModal({
 
       return () => clearTimeout(delayDebounce)
     } else {
+      setIsVerifying(false)
       setVerifiedName("")
       setVerificationError(null)
     }
   }, [targetType, meterNumber, disco, meterType, tariffBand, onVerifyMeter])
 
   if (!isOpen) return null
+
+  const effectiveMeterNumber = targetType === "my_meter" ? (currentUserMeter || meterNumber || "") : (meterNumber || "")
+  const effectiveDisco = targetType === "my_meter" ? (currentUserDisco || disco || "IKEDC") : disco
+  const effectiveMeterType = targetType === "my_meter" ? (currentUserMeterType || meterType || "Prepaid") : meterType
+  const effectiveTariffBand = targetType === "my_meter" ? (currentUserTariffBand || tariffBand || "Band A") : tariffBand
 
   const tariffRates: Record<string, number> = {
     "Band A": 209.50,
@@ -125,7 +148,7 @@ export function PurchaseUnitsModal({
     "Band E": 35.00
   }
 
-  const currentRate = tariffRates[tariffBand] || 209.50
+  const currentRate = tariffRates[effectiveTariffBand] || 209.50
   const vendorServiceFee = 100
   const numAmount = Number(amount) || 0
   const netVendedAmount = Math.max(0, numAmount - vendorServiceFee)
@@ -133,10 +156,10 @@ export function PurchaseUnitsModal({
 
   const isBuyDisabled =
     isProcessing ||
-    isVerifying ||
+    (targetType === "third_party" && isVerifying) ||
     numAmount < 500 ||
-    meterNumber.trim().length < 10 ||
-    !disco
+    effectiveMeterNumber.trim().length < 10 ||
+    !effectiveDisco
 
   const handleProceedPaystack = async () => {
     if (isBuyDisabled) return
@@ -148,10 +171,10 @@ export function PurchaseUnitsModal({
 
       const payload = {
         uid: uid || "mock-uid",
-        meterNumber: meterNumber.trim(),
-        disco,
-        meterType,
-        tariffBand,
+        meterNumber: effectiveMeterNumber.trim(),
+        disco: effectiveDisco,
+        meterType: effectiveMeterType,
+        tariffBand: effectiveTariffBand,
         amount: numAmount,
         phone: userPhone || "08000000000",
         email: userEmail || "user@voltdigitalservices.com",
