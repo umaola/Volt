@@ -2899,8 +2899,16 @@ export const verifyMeterNumber = onRequest({ cors: true }, async (request, respo
             return;
         }
 
-        const decoded = await verifyRequestAuth(request, response);
-        if (!decoded) return;
+        const authHeader = request.headers.authorization;
+        if (authHeader && authHeader.startsWith("Bearer ")) {
+            const token = authHeader.split("Bearer ")[1];
+            try {
+                const { getAuth } = await import("firebase-admin/auth");
+                await getAuth().verifyIdToken(token);
+            } catch (authErr) {
+                logger.warn("Optional auth verification in verifyMeterNumber failed:", authErr);
+            }
+        }
 
         const discoMap: Record<string, string> = {
             "IKEDC": "ikeja-electric",

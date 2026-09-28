@@ -1095,11 +1095,24 @@ function PageContent() {
     }
   }
 
-  const handleVerifyMeter = React.useCallback((meterNumber: string, disco: string, meterType: string, tariffBand?: string) => {
+  const handleVerifyMeter = React.useCallback(async (meterNumber: string, disco: string, meterType: string, tariffBand?: string) => {
+    let token = ""
+    try {
+      if (!auth.currentUser && typeof auth.authStateReady === "function") {
+        await auth.authStateReady()
+      }
+      if (auth.currentUser) {
+        token = await auth.currentUser.getIdToken()
+      }
+    } catch {}
+
     const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
     return fetch(`${backendUrl}/verifyMeterNumber`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { "Authorization": `Bearer ${token}` } : {})
+      },
       body: JSON.stringify({ meterNumber, disco, meterType, tariffBand })
     })
       .then((res) => {

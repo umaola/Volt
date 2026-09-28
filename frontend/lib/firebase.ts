@@ -76,15 +76,22 @@ if (typeof window !== "undefined") {
     if (backendUrl && typeof url === "string" && url.startsWith(backendUrl)) {
       let token = ""
       try {
+        if (!auth.currentUser && typeof auth.authStateReady === "function") {
+          await auth.authStateReady()
+        }
         if (auth.currentUser) {
           token = await auth.currentUser.getIdToken()
         }
       } catch {
       }
+      const existingHeaders = options?.headers instanceof Headers
+        ? Object.fromEntries(options.headers.entries())
+        : (options?.headers as Record<string, string>) || {}
+      const hasAuth = !!(existingHeaders["Authorization"] || existingHeaders["authorization"])
       const headers = {
         "Content-Type": "application/json",
-        ...options?.headers,
-        ...(token ? { "Authorization": `Bearer ${token}` } : {})
+        ...existingHeaders,
+        ...(token && !hasAuth ? { "Authorization": `Bearer ${token}` } : {})
       }
       return originalFetch(url, { ...options, headers })
     }
