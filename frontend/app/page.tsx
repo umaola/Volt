@@ -22,6 +22,7 @@ import { UnitPurchaseCallbackPage } from "@/components/pages/unit-purchase-callb
 import { BottomNavigation, TabType } from "@/components/design-system/bottom-navigation"
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail, onAuthStateChanged, signOut, applyActionCode, checkActionCode, signInWithCustomToken } from "firebase/auth"
 import { auth, getFcmToken, onMessageListener } from "@/lib/firebase"
+import { setupPushNotifications } from "@/lib/push-notifications"
 import { toast } from "sonner"
 
 
@@ -482,25 +483,30 @@ function PageContent() {
         setUser(null)
         setDashboardData(null)
         setAuthResolved(true)
+        setIsLoading(false)
       } else {
         const urlParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null
         const isVerifying = urlParams?.get("mode") === "verifyEmail"
-        if (!isSessionValid() && !isVerifying) {
+        const currentPage = urlParams?.get("page") || "splash"
+        const isAuthPage = currentPage === "login" || currentPage === "signup"
+        if (!isSessionValid() && !isVerifying && !isAuthPage) {
           clearUserSession()
           setUser(null)
           setDashboardData(null)
           setAuthResolved(true)
+          setIsLoading(false)
           return
         }
         updateSessionTimestamp()
         if (!firebaseUser.emailVerified && !isVerifying) {
           setAuthResolved(true)
+          setIsLoading(false)
           navigateTo("otp")
           return
         }
-        const currentPage = urlParams?.get("page") || "splash"
         if (currentPage === "otp") {
           setAuthResolved(true)
+          setIsLoading(false)
           return
         }
         setAuthResolved(false)
@@ -541,7 +547,7 @@ function PageContent() {
               if (parsedUser) {
                 setUser(parsedUser)
               }
-              setDashboardData(getLocalDashboardFallback(parsedUser || user))
+              setDashboardData(getLocalDashboardFallback(parsedUser || userRef.current))
               return
             }
             setDashboardData(data)
@@ -574,10 +580,11 @@ function PageContent() {
             if (parsedUser) {
               setUser(parsedUser)
             }
-            setDashboardData(getLocalDashboardFallback(parsedUser || user))
+            setDashboardData(getLocalDashboardFallback(parsedUser || userRef.current))
           })
           .finally(() => {
             setAuthResolved(true)
+            setIsLoading(false)
           })
       }
     })
@@ -728,44 +735,7 @@ function PageContent() {
         fetchHistoryData()
         fetchInsightsData()
 
-        const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
-        const uid = auth.currentUser.uid
-        const registerFCM = async () => {
-          try {
-            if (typeof window !== "undefined" && "Notification" in window) {
-              const permission = await Notification.requestPermission()
-              if (permission === "granted") {
-                const token = await getFcmToken()
-                if (token) {
-                  await fetch(`${backendUrl}/registerDeviceToken`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      uid,
-                      deviceToken: token,
-                      platform: "web"
-                    })
-                  })
-                  return
-                }
-              }
-            }
-          } catch (e) {
-            console.error("FCM registration error:", e)
-          }
-          await fetch(`${backendUrl}/registerDeviceToken`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              uid,
-              deviceToken: "token_mock_" + uid,
-              platform: "web"
-            })
-          }).catch((err) => {
-            console.error("Mock token registration error:", err)
-          })
-        }
-        registerFCM()
+        setupPushNotifications(auth.currentUser.uid)
       } else if (pageParam === "calculator") {
         fetchDashboardData()
         fetchHistoryData()
@@ -978,12 +948,28 @@ function PageContent() {
       if (todayStr !== onboardingDateStr && lastCalDate !== todayStr) {
         const cachedCalibratedToday = localStorage.getItem(`volt_calibrated_${todayStr}`)
         if (!cachedCalibratedToday) {
-          setShowCalibrationPopup(true)
-          localStorage.setItem(`volt_calibrated_${todayStr}`, "true")
+          const yesterday = new Date()
+          yesterday.setDate(yesterday.getDate() - 1)
+          const yesterdayStr = yesterday.toISOString().split("T")[0]
+
+          const localLogsStr = typeof window !== "undefined" ? localStorage.getItem("volt_power_logs") : null
+          const localLogs = localLogsStr ? JSON.parse(localLogsStr) : (historyData?.powerLogs || [])
+          const hasToggledPowerYesterday = localLogs.some((l: any) => {
+            const onDate = (l.powerOn || l.power_on || "").split("T")[0]
+            const offDate = (l.powerOff || l.power_off || "").split("T")[0]
+            return onDate === yesterdayStr || offDate === yesterdayStr
+          })
+
+          if (hasToggledPowerYesterday) {
+            localStorage.setItem(`volt_calibrated_${todayStr}`, "true")
+          } else {
+            setShowCalibrationPopup(true)
+            localStorage.setItem(`volt_calibrated_${todayStr}`, "true")
+          }
         }
       }
     }
-  }, [pageParam, dashboardData, user?.meterNumber])
+  }, [pageParam, dashboardData, user?.meterNumber, historyData?.powerLogs])
 
 
   const handleBack = () => {
@@ -1011,6 +997,7 @@ function PageContent() {
     setIsLoading(true)
     setSignupError(null)
     setSignupTempData(signupData)
+    updateSessionTimestamp()
     const { name, email, password } = signupData
 
     createUserWithEmailAndPassword(auth, email, password)
@@ -1206,6 +1193,7 @@ function PageContent() {
   const handleLogin = (loginData: { email: string; password: string }) => {
     setIsLoading(true)
     setLoginError(null)
+    updateSessionTimestamp()
     const { email, password } = loginData
 
     signInWithEmailAndPassword(auth, email, password)
@@ -1222,6 +1210,9 @@ function PageContent() {
         }
       })
       .catch((error) => {
+        if (typeof window !== "undefined") {
+          localStorage.removeItem("volt_session_timestamp")
+        }
         console.error("Login failed:", error)
         let cleanMessage = "Login failed. Please check your credentials."
         if (error.code === "auth/invalid-credential" || error.code === "auth/user-not-found" || error.code === "auth/wrong-password") {
@@ -1230,8 +1221,6 @@ function PageContent() {
           cleanMessage = "Please enter a valid email address."
         }
         setLoginError(cleanMessage)
-      })
-      .finally(() => {
         setIsLoading(false)
       })
   }
@@ -1470,6 +1459,24 @@ function PageContent() {
         const duration = (new Date(nowStr).getTime() - new Date(localLogs[activeLogIndex].powerOn).getTime()) / (1000 * 60 * 60)
         localLogs[activeLogIndex].powerOff = nowStr
         localLogs[activeLogIndex].duration = Number(duration.toFixed(2))
+
+        const dailyRate = dashboardData?.dailyBurnRate ?? 4.3
+        const hourlyRate = dailyRate / 24
+        const consumed = Number((hourlyRate * Math.max(0, duration)).toFixed(2))
+        const currentU = user?.currentUnits ?? dashboardData?.remainingUnits ?? 0
+        const newU = Math.max(0, Number((currentU - consumed).toFixed(2)))
+        setUser((prev: any) => {
+          if (!prev) return prev
+          const updated = { ...prev, currentUnits: newU }
+          if (typeof window !== "undefined") {
+            localStorage.setItem("volt_user", JSON.stringify(updated))
+          }
+          return updated
+        })
+        setDashboardData((prev: any) => {
+          if (!prev) return prev
+          return { ...prev, remainingUnits: newU }
+        })
       }
     }
     localStorage.setItem("volt_power_logs", JSON.stringify(localLogs))
@@ -1504,6 +1511,20 @@ function PageContent() {
       })
       .then((data) => {
         if (data && data.success) {
+          if (typeof data.newUnits === "number") {
+            setUser((prev: any) => {
+              if (!prev) return prev
+              const updated = { ...prev, currentUnits: data.newUnits }
+              if (typeof window !== "undefined") {
+                localStorage.setItem("volt_user", JSON.stringify(updated))
+              }
+              return updated
+            })
+            setDashboardData((prev: any) => {
+              if (!prev) return prev
+              return { ...prev, remainingUnits: data.newUnits }
+            })
+          }
           fetchDashboardData()
           fetchHistoryData()
         }

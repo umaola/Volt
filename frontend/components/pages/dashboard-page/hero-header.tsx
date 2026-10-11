@@ -1,5 +1,5 @@
 import * as React from "react"
-import { IconBolt } from "@tabler/icons-react"
+import { IconAdjustmentsHorizontal } from "@tabler/icons-react"
 
 interface HeroHeaderProps {
   userName: string
@@ -88,7 +88,7 @@ export function ExpandedHeader({
 
       <div className="flex justify-between items-center z-10">
         <div className="flex flex-col">
-          <span className="text-white/80 text-sm">Good morning,</span>
+          <span className="text-white/80 text-sm">Hello,</span>
           <span className="text-xl font-bold flex items-center gap-1">
             {userName} <span className="animate-bounce">👋</span>
           </span>
@@ -123,13 +123,14 @@ export function ExpandedHeader({
           </div>
         </div>
 
-        {onBuyUnits && (
+        {onCalibrateManual && (
           <button
-            onClick={onBuyUnits}
-            className="flex items-center justify-center gap-1.5 w-full py-2 bg-white text-[#00BF63] hover:bg-emerald-50 rounded-xl text-xs font-bold transition-all shadow-sm active:scale-98 cursor-pointer mt-1"
+            type="button"
+            onClick={onCalibrateManual}
+            className="flex items-center justify-center gap-1.5 w-full py-2 bg-white/20 hover:bg-white/30 border border-white/30 text-white rounded-xl text-xs font-bold transition-all shadow-sm active:scale-98 cursor-pointer mt-1"
           >
-            <IconBolt className="w-4 h-4 text-[#00BF63] fill-[#00BF63]" />
-            <span>Buy Electricity Units</span>
+            <IconAdjustmentsHorizontal className="w-4 h-4" />
+            <span>Calibrate Meter</span>
           </button>
         )}
       </div>

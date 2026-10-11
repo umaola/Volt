@@ -1420,17 +1420,19 @@ export const logPowerSupply = onRequest({ cors: true }, async (request, response
                 .where("power_off", "==", null)
                 .limit(1)
                 .get();
+            let sessionDuration = 0;
             if (!activeLogsQuery.empty) {
                 const logDoc = activeLogsQuery.docs[0];
                 const data = logDoc.data();
                 const powerOnTime = new Date(data.power_on).getTime();
                 const powerOffTime = new Date(now).getTime();
-                const durationHours = Math.max(0, (powerOffTime - powerOnTime) / (1000 * 60 * 60));
+                sessionDuration = Math.max(0, (powerOffTime - powerOnTime) / (1000 * 60 * 60));
                 await logDoc.ref.update({
                     power_off: now,
-                    duration_hours: Number(durationHours.toFixed(2))
+                    duration_hours: Number(sessionDuration.toFixed(2))
                 });
             } else {
+                sessionDuration = 1;
                 const logRef = db.collection("power_supply_logs").doc();
                 const powerOnTime = new Date(Date.now() - 60 * 60 * 1000).toISOString();
                 await logRef.set({
@@ -1443,7 +1445,34 @@ export const logPowerSupply = onRequest({ cors: true }, async (request, response
                     created_at: now
                 });
             }
-            response.status(200).send({ success: true, powerState: "off" });
+
+            let hourlyLoadKW = 0.18;
+            const appliancesQuery = await db.collection("user_appliances")
+                .where("user_id", "==", uid)
+                .where("is_active", "==", true)
+                .get();
+            let activeLoad = 0;
+            appliancesQuery.docs.forEach(doc => {
+                const app = doc.data();
+                activeLoad += Number(app.custom_wattage) || 0;
+            });
+            if (activeLoad > 0) {
+                hourlyLoadKW = activeLoad / 1000;
+            }
+            const unitsConsumed = Number((sessionDuration * hourlyLoadKW).toFixed(2));
+
+            const metersQuery = await db.collection("meters").where("user_id", "==", uid).limit(1).get();
+            let newUnits = 0;
+            if (!metersQuery.empty) {
+                const mDoc = metersQuery.docs[0];
+                const currentUnits = Number(mDoc.data().current_units || 0);
+                newUnits = Math.max(0, Number((currentUnits - unitsConsumed).toFixed(2)));
+                await mDoc.ref.update({
+                    current_units: newUnits,
+                    updated_at: now
+                });
+            }
+            response.status(200).send({ success: true, powerState: "off", newUnits });
         }
     } catch (error) {
         logger.error("Error logging power supply:", error);
@@ -4789,6 +4818,201 @@ export const calculateApplianceConsumption = onRequest({ cors: true }, async (re
     } catch (error) {
         logger.error("Error in calculateApplianceConsumption:", error);
         response.status(500).send({ success: false, error: "Internal server error" });
+    }
+});
+
+const NIGERIAN_PIDGIN_NUDGES = [
+    {
+        title: "Volt",
+        body: "My Gee! Abeg light dey your side?"
+    },
+    {
+        title: "Volt",
+        body: "NEPA don bring light for your area?"
+    },
+    {
+        title: "Volt",
+        body: "Light still dey? Tap enter app make we track your meter units wella!"
+    },
+    {
+        title: "Volt",
+        body: "Oya check your meter! Light suppose dey your crib right now"
+    },
+    {
+        title: "Volt",
+        body: "Light still dey or NEPA don strike?"
+    },
+    {
+        title: "Volt",
+        body: "Abeg confirm if power dey your side now"
+    },
+    {
+        title: "Volt",
+        body: "How e be? Light dey or gen dey run?"
+    },
+    {
+        title: "Volt",
+        body: "You get light for house? Update your Volt sharp sharp"
+    },
+    {
+        title: "Volt",
+        body: "Up NEPA? Tap enter make we know"
+    },
+    {
+        title: "Volt",
+        body: "NEPA don take light? Log am quick make your units balance"
+    },
+    {
+        title: "Volt",
+        body: "Guy, light dey your street today?"
+    },
+    {
+        title: "Volt",
+        body: "How far, NEPA dey behave for your area today?"
+    }
+];
+
+export const sendDailyPowerReminder = onRequest({ cors: true }, async (request, response) => {
+    try {
+        const { uid: targetUid } = request.body || {};
+        const { getMessaging } = await import("firebase-admin/messaging");
+
+        let usersToNotify: string[] = [];
+        if (targetUid) {
+            usersToNotify = [targetUid];
+        } else {
+            const usersSnapshot = await db.collection("users").get();
+            usersToNotify = usersSnapshot.docs.map(d => d.id);
+        }
+
+        let sentCount = 0;
+        for (const uid of usersToNotify) {
+            const prefsDoc = await db.collection("notification_preferences").doc(uid).get();
+            const prefs = prefsDoc.data();
+            if (prefs && prefs.daily_reminders === false) {
+                continue;
+            }
+
+            const nudge = NIGERIAN_PIDGIN_NUDGES[Math.floor(Math.random() * NIGERIAN_PIDGIN_NUDGES.length)];
+
+            const notifId = db.collection("notifications").doc().id;
+            await db.collection("notifications").doc(notifId).set({
+                id: notifId,
+                user_id: uid,
+                title: nudge.title,
+                body: nudge.body,
+                notification_type: "daily_power_nudge",
+                status: "sent",
+                sent_at: new Date().toISOString(),
+                created_at: new Date().toISOString()
+            });
+
+            await db.collection("users").doc(uid).collection("notifications").doc(notifId).set({
+                id: notifId,
+                title: nudge.title,
+                message: nudge.body,
+                type: "daily_power_nudge",
+                created_at: new Date().toISOString(),
+                read: false
+            });
+
+            const tokensSnapshot = await db.collection("device_tokens")
+                .where("user_id", "==", uid)
+                .get();
+
+            for (const tokenDoc of tokensSnapshot.docs) {
+                const token = tokenDoc.data().device_token;
+                if (token && !token.startsWith("token_mock_")) {
+                    try {
+                        await getMessaging().send({
+                            notification: {
+                                title: nudge.title,
+                                body: nudge.body
+                            },
+                            data: {
+                                type: "daily_power_nudge",
+                                url: "/?page=dashboard"
+                            },
+                            token
+                        });
+                        sentCount++;
+                    } catch (fcmErr) {
+                        logger.warn(`Failed to send daily nudge to token ${token}:`, fcmErr);
+                    }
+                }
+            }
+        }
+
+        response.status(200).send({ success: true, sentCount });
+    } catch (error) {
+        logger.error("Error sending daily power reminder:", error);
+        response.status(500).send({ error: "Internal server error" });
+    }
+});
+
+export const scheduledDailyPowerReminder = onSchedule("0 11 * * *", async (event) => {
+    try {
+        const { getMessaging } = await import("firebase-admin/messaging");
+        const usersSnapshot = await db.collection("users").get();
+
+        for (const userDoc of usersSnapshot.docs) {
+            const uid = userDoc.id;
+            const prefsDoc = await db.collection("notification_preferences").doc(uid).get();
+            const prefs = prefsDoc.data();
+            if (prefs && prefs.daily_reminders === false) {
+                continue;
+            }
+
+            const nudge = NIGERIAN_PIDGIN_NUDGES[Math.floor(Math.random() * NIGERIAN_PIDGIN_NUDGES.length)];
+
+            const notifId = db.collection("notifications").doc().id;
+            await db.collection("notifications").doc(notifId).set({
+                id: notifId,
+                user_id: uid,
+                title: nudge.title,
+                body: nudge.body,
+                notification_type: "daily_power_nudge",
+                status: "sent",
+                sent_at: new Date().toISOString(),
+                created_at: new Date().toISOString()
+            });
+
+            await db.collection("users").doc(uid).collection("notifications").doc(notifId).set({
+                id: notifId,
+                title: nudge.title,
+                message: nudge.body,
+                type: "daily_power_nudge",
+                created_at: new Date().toISOString(),
+                read: false
+            });
+
+            const tokensSnapshot = await db.collection("device_tokens")
+                .where("user_id", "==", uid)
+                .get();
+
+            for (const tokenDoc of tokensSnapshot.docs) {
+                const token = tokenDoc.data().device_token;
+                if (token && !token.startsWith("token_mock_")) {
+                    try {
+                        await getMessaging().send({
+                            notification: {
+                                title: nudge.title,
+                                body: nudge.body
+                            },
+                            data: {
+                                type: "daily_power_nudge",
+                                url: "/?page=dashboard"
+                            },
+                            token
+                        });
+                    } catch (fcmErr) {
+                        logger.warn(`Failed to send daily nudge to token ${token}:`, fcmErr);
+                    }
+                }
+            }
+        }
+    } catch (err) {
+        logger.error("Error in scheduledDailyPowerReminder:", err);
     }
 });
 
