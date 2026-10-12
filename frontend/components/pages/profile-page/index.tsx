@@ -39,6 +39,8 @@ interface ProfilePageProps {
   onCancelSubscription?: () => Promise<void>
   isCancelling?: boolean
   onDeleteAccount?: () => Promise<void>
+  isPwaInstalled?: boolean
+  onPromptInstall?: () => void
 }
 
 export function ProfilePage({
@@ -52,7 +54,9 @@ export function ProfilePage({
   isSubmitting = false,
   onCancelSubscription,
   isCancelling = false,
-  onDeleteAccount
+  onDeleteAccount,
+  isPwaInstalled = false,
+  onPromptInstall
 }: ProfilePageProps) {
   const [phone, setPhone] = React.useState(userData.phone)
   const [meterNumber, setMeterNumber] = React.useState(userData.meterNumber)
@@ -391,6 +395,27 @@ export function ProfilePage({
               onCheckedChange={handleToggleLowUnit}
               disabled={isLoading || isSubmitting}
             />
+          </div>
+
+          <div className="flex items-center justify-between text-xs border-t border-zinc-100 pt-3">
+            <div className="flex flex-col pr-2">
+              <span className="font-bold text-[#121212]">Add to Home Screen</span>
+              <span className="text-[#4B5563]">Pin Volt like an app widget for fast 1-tap access</span>
+            </div>
+            {isPwaInstalled ? (
+              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200 shrink-0">
+                <IconCheck className="w-3.5 h-3.5" />
+                Added
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={onPromptInstall}
+                className="text-xs font-bold text-primary hover:text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-3 py-1.5 rounded-xl transition-colors cursor-pointer shrink-0"
+              >
+                Add App
+              </button>
+            )}
           </div>
         </StandardCard>
 

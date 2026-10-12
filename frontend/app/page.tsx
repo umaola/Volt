@@ -24,6 +24,8 @@ import { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswor
 import { auth, getFcmToken, onMessageListener } from "@/lib/firebase"
 import { setupPushNotifications } from "@/lib/push-notifications"
 import { toast } from "sonner"
+import { PwaInstallPrompt } from "@/components/pwa-install-prompt"
+import { usePwaInstall } from "@/hooks/use-pwa-install"
 
 
 
@@ -61,6 +63,18 @@ function PageContent() {
   const pageParam = searchParams.get("page") || "splash"
   const slideParam = searchParams.get("slide")
   const initialSlide = slideParam ? parseInt(slideParam, 10) : 0
+  const actionParam = searchParams.get("action")
+  const tabParam = searchParams.get("tab")
+
+  const {
+    isOpen: isPwaInstallOpen,
+    isIOS: isPwaIOS,
+    isInstalled: isPwaInstalled,
+    install: handlePwaInstall,
+    dismiss: handlePwaDismiss,
+    markInstalled: handlePwaMarkInstalled,
+    promptInstall: handlePromptInstall
+  } = usePwaInstall()
 
   const [user, setUser] = React.useState<{
     name: string
@@ -1536,6 +1550,24 @@ function PageContent() {
       })
   }
 
+  const handledActionRef = React.useRef<string | null>(null)
+  React.useEffect(() => {
+    const actionKey = `${actionParam}-${tabParam}`
+    if (handledActionRef.current === actionKey) return
+    if (!authResolved || !user) return
+
+    if (actionParam === "toggle") {
+      handledActionRef.current = actionKey
+      handleTogglePower(powerState === "on" ? "off" : "on")
+    } else if (actionParam === "calibrate") {
+      handledActionRef.current = actionKey
+      setShowManualCalibration(true)
+    } else if (tabParam === "recharge" || actionParam === "buy") {
+      handledActionRef.current = actionKey
+      setIsPurchaseUnitsOpen(true)
+    }
+  }, [actionParam, tabParam, authResolved, user, powerState])
+
   const handleQuickAction = (action: "calculator" | "outage" | "appliance" | "insights" | "history" | "notification_opened" | "surge-checklist") => {
     if (action === "calculator") {
       trackAnalyticsEvent("calculator_usage")
@@ -2142,6 +2174,8 @@ function PageContent() {
             onVerifyMeter={handleVerifyMeter}
             isLoading={isDashboardLoading || !dashboardData}
             isSubmitting={isSubmitting}
+            isPwaInstalled={isPwaInstalled}
+            onPromptInstall={handlePromptInstall}
             onDeleteAccount={async () => {
               try {
                 if (!auth.currentUser) return
@@ -2346,6 +2380,14 @@ function PageContent() {
         uid={auth.currentUser?.uid || "mock-uid"}
         onVerifyMeter={handleVerifyMeter}
         onPurchaseSuccess={handlePurchaseUnitsSuccess}
+      />
+
+      <PwaInstallPrompt
+        isOpen={isPwaInstallOpen}
+        isIOS={isPwaIOS}
+        onInstall={handlePwaInstall}
+        onDismiss={handlePwaDismiss}
+        onAlreadyInstalled={handlePwaMarkInstalled}
       />
     </div>
   )
