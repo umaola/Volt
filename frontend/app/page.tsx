@@ -69,6 +69,7 @@ function PageContent() {
   const {
     isOpen: isPwaInstallOpen,
     isIOS: isPwaIOS,
+    browser: pwaBrowser,
     isInstalled: isPwaInstalled,
     install: handlePwaInstall,
     dismiss: handlePwaDismiss,
@@ -1338,7 +1339,46 @@ function PageContent() {
   const [manualUnitsInput, setManualUnitsInput] = React.useState("")
 
   const handleCalibrateUnits = async (payload: { type: "daily" | "manual"; lightYesterday?: boolean; hours?: number; manualUnits?: number }) => {
-    setIsLoading(true)
+    const todayStr = new Date().toISOString().split("T")[0]
+    const currentUnits = user?.currentUnits ?? dashboardData?.remainingUnits ?? 0
+    let localNewUnits = currentUnits
+
+    if (payload.type === "daily") {
+      if (payload.lightYesterday) {
+        const dailyRate = dashboardData?.dailyBurnRate ?? 4.3
+        const hourlyRate = dailyRate / 24
+        const hours = payload.hours ?? 0
+        const consumed = Number((hourlyRate * hours).toFixed(2))
+        localNewUnits = Math.max(0, Number((currentUnits - consumed).toFixed(2)))
+      }
+    } else if (payload.type === "manual") {
+      localNewUnits = Math.max(0, Number(Number(payload.manualUnits ?? currentUnits).toFixed(2)))
+    }
+
+    if (typeof window !== "undefined") {
+      localStorage.setItem(`volt_calibrated_${todayStr}`, "true")
+    }
+
+    const updatedUser = {
+      ...(user || {}),
+      currentUnits: localNewUnits,
+      lastCalibrationDate: todayStr
+    }
+    setUser(updatedUser as any)
+    if (typeof window !== "undefined") {
+      localStorage.setItem("volt_user", JSON.stringify(updatedUser))
+    }
+
+    if (dashboardData) {
+      setDashboardData({
+        ...dashboardData,
+        remainingUnits: localNewUnits,
+        lastCalibrationDate: todayStr
+      })
+    }
+
+    toast.success("Meter calibrated successfully!")
+
     const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
     const uid = auth.currentUser?.uid || "mock-uid"
 
@@ -1349,31 +1389,29 @@ function PageContent() {
         body: JSON.stringify({ uid, ...payload })
       })
 
-      if (!res.ok) throw new Error("Calibration failed")
-      const data = await res.json() as { success: boolean; newUnits: number; lastCalibrationDate: string }
-
-      if (user) {
-        const updatedUser = {
-          ...user,
-          currentUnits: data.newUnits,
-          lastCalibrationDate: data.lastCalibrationDate
+      if (res.ok) {
+        const data = await res.json() as { success: boolean; newUnits: number; lastCalibrationDate: string }
+        if (data && typeof data.newUnits === "number") {
+          const syncedUser = {
+            ...(user || updatedUser),
+            currentUnits: data.newUnits,
+            lastCalibrationDate: data.lastCalibrationDate || todayStr
+          }
+          setUser(syncedUser as any)
+          if (typeof window !== "undefined") {
+            localStorage.setItem("volt_user", JSON.stringify(syncedUser))
+          }
+          if (dashboardData) {
+            setDashboardData((prev) => prev ? {
+              ...prev,
+              remainingUnits: data.newUnits,
+              lastCalibrationDate: data.lastCalibrationDate || todayStr
+            } : null)
+          }
         }
-        setUser(updatedUser)
-        localStorage.setItem("volt_user", JSON.stringify(updatedUser))
       }
-      if (dashboardData) {
-        setDashboardData({
-          ...dashboardData,
-          remainingUnits: data.newUnits,
-          lastCalibrationDate: data.lastCalibrationDate
-        })
-      }
-      toast.success("Meter calibrated successfully!")
     } catch (err) {
-      console.error(err)
-      toast.error("Failed to calibrate meter. Please try again.")
-    } finally {
-      setIsLoading(false)
+      console.warn("Backend calibration sync note:", err)
     }
   }
 
@@ -2286,23 +2324,27 @@ function PageContent() {
               <button
                 type="button"
                 onClick={() => {
+                  const todayStr = new Date().toISOString().split("T")[0]
+                  if (typeof window !== "undefined") {
+                    localStorage.setItem(`volt_calibrated_${todayStr}`, "true")
+                  }
                   setShowCalibrationPopup(false)
                 }}
-                className="flex-1 py-3 rounded-xl border border-zinc-200 text-xs font-bold text-zinc-600 hover:bg-zinc-50 cursor-pointer"
+                className="flex-1 py-3 rounded-xl border border-zinc-200 text-xs font-bold text-zinc-600 hover:bg-zinc-50 cursor-pointer active:scale-95 transition-transform"
               >
                 Skip
               </button>
               <button
                 type="button"
-                onClick={async () => {
-                  await handleCalibrateUnits({
+                onClick={() => {
+                  setShowCalibrationPopup(false)
+                  handleCalibrateUnits({
                     type: "daily",
                     lightYesterday,
                     hours: lightYesterday ? lightHours : 0
                   })
-                  setShowCalibrationPopup(false)
                 }}
-                className="flex-1 py-3 rounded-xl bg-primary text-white text-xs font-bold hover:bg-emerald-600 cursor-pointer"
+                className="flex-1 py-3 rounded-xl bg-primary text-white text-xs font-bold hover:bg-emerald-600 cursor-pointer active:scale-95 transition-transform"
               >
                 Confirm
               </button>
@@ -2346,20 +2388,20 @@ function PageContent() {
               </button>
               <button
                 type="button"
-                onClick={async () => {
+                onClick={() => {
                   const val = parseFloat(manualUnitsInput)
                   if (isNaN(val) || val < 0) {
                     toast.error("Please enter a valid amount of remaining units.")
                     return
                   }
-                  await handleCalibrateUnits({
+                  setShowManualCalibration(false)
+                  setManualUnitsInput("")
+                  handleCalibrateUnits({
                     type: "manual",
                     manualUnits: val
                   })
-                  setShowManualCalibration(false)
-                  setManualUnitsInput("")
                 }}
-                className="flex-1 py-3 rounded-xl bg-primary text-white text-xs font-bold hover:bg-emerald-600 cursor-pointer"
+                className="flex-1 py-3 rounded-xl bg-primary text-white text-xs font-bold hover:bg-emerald-600 cursor-pointer active:scale-95 transition-transform"
               >
                 Sync Meter
               </button>
@@ -2385,6 +2427,7 @@ function PageContent() {
       <PwaInstallPrompt
         isOpen={isPwaInstallOpen}
         isIOS={isPwaIOS}
+        browser={pwaBrowser}
         onInstall={handlePwaInstall}
         onDismiss={handlePwaDismiss}
         onAlreadyInstalled={handlePwaMarkInstalled}

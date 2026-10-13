@@ -63,7 +63,7 @@ export function AndroidBanner({
             className="text-xs h-9 text-muted-foreground hover:text-foreground rounded-xl"
           >
             <IconCheck className="w-3.5 h-3.5 mr-1" />
-            Already Added
+            Already added
           </Button>
         </div>
       </div>

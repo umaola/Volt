@@ -11,10 +11,13 @@ interface BeforeInstallPromptEvent extends Event {
 const STORAGE_KEY = "volt_pwa_installed"
 const DISMISS_KEY = "volt_pwa_dismissed_at"
 
+export type PwaBrowser = "chrome" | "safari" | "firefox" | "edge" | "other"
+
 export function usePwaInstall() {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null)
   const [isOpen, setIsOpen] = useState(false)
   const [isIOS, setIsIOS] = useState(false)
+  const [browser, setBrowser] = useState<PwaBrowser>("safari")
   const [isInstalled, setIsInstalled] = useState(false)
 
   useEffect(() => {
@@ -45,11 +48,24 @@ export function usePwaInstall() {
       }
     }
 
+    const ua = navigator.userAgent || ""
     const isAppleMobile =
-      /iPad|iPhone|iPod/.test(navigator.userAgent) &&
+      /iPad|iPhone|iPod/.test(ua) &&
       !(window as unknown as { MSStream?: unknown }).MSStream
 
     setIsIOS(isAppleMobile)
+
+    if (/CriOS/i.test(ua) || (/Chrome/i.test(ua) && !/Edg/i.test(ua))) {
+      setBrowser("chrome")
+    } else if (/FxiOS/i.test(ua) || /Firefox/i.test(ua)) {
+      setBrowser("firefox")
+    } else if (/EdgiOS/i.test(ua) || /Edg/i.test(ua)) {
+      setBrowser("edge")
+    } else if (/Safari/i.test(ua)) {
+      setBrowser("safari")
+    } else {
+      setBrowser("other")
+    }
 
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault()
@@ -118,6 +134,7 @@ export function usePwaInstall() {
   return {
     isOpen,
     isIOS,
+    browser,
     isInstalled,
     canInstall: !!deferredPrompt || isIOS,
     install,
