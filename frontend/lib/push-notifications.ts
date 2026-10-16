@@ -3,6 +3,60 @@ import { PushNotifications } from "@capacitor/push-notifications"
 import { getFcmToken } from "@/lib/firebase"
 import { toast } from "sonner"
 
+export function isStandaloneMode(): boolean {
+  if (typeof window === "undefined") return false
+  const isMatchMedia = window.matchMedia?.("(display-mode: standalone)")?.matches ?? false
+  const isIosStandalone = (window.navigator as unknown as { standalone?: boolean })?.standalone ?? false
+  return Boolean(isMatchMedia || isIosStandalone)
+}
+
+export async function requestPushPermission(uid: string): Promise<boolean> {
+  if (typeof window === "undefined" || !uid) return false
+
+  const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
+
+  if (Capacitor.isNativePlatform()) {
+    try {
+      let permStatus = await PushNotifications.checkPermissions()
+      if (permStatus.receive === "prompt") {
+        permStatus = await PushNotifications.requestPermissions()
+      }
+      if (permStatus.receive === "granted") {
+        await PushNotifications.register()
+        return true
+      }
+    } catch (e) {
+      console.error(e)
+    }
+    return false
+  }
+
+  if (!("Notification" in window)) return false
+
+  try {
+    const permission = await Notification.requestPermission()
+    if (permission === "granted") {
+      const token = await getFcmToken()
+      if (token) {
+        await fetch(`${backendUrl}/registerDeviceToken`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            uid,
+            deviceToken: token,
+            platform: "web"
+          })
+        })
+        return true
+      }
+    }
+  } catch (e) {
+    console.error("Web FCM registration error:", e)
+  }
+
+  return false
+}
+
 export async function setupPushNotifications(uid: string) {
   if (typeof window === "undefined" || !uid) return
 
@@ -55,37 +109,23 @@ export async function setupPushNotifications(uid: string) {
   }
 
   try {
-    if ("Notification" in window) {
-      const permission = await Notification.requestPermission()
-      if (permission === "granted") {
-        const token = await getFcmToken()
-        if (token) {
-          await fetch(`${backendUrl}/registerDeviceToken`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              uid,
-              deviceToken: token,
-              platform: "web"
-            })
+    if ("Notification" in window && Notification.permission === "granted") {
+      const token = await getFcmToken()
+      if (token) {
+        await fetch(`${backendUrl}/registerDeviceToken`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            uid,
+            deviceToken: token,
+            platform: "web"
           })
-          return
-        }
+        }).catch((err) => {
+          console.error("Web token sync error:", err)
+        })
       }
     }
   } catch (e) {
-    console.error("Web FCM registration error:", e)
+    console.error("Web FCM token error:", e)
   }
-
-  await fetch(`${backendUrl}/registerDeviceToken`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      uid,
-      deviceToken: "token_mock_" + uid,
-      platform: "web"
-    })
-  }).catch((err) => {
-    console.error("Mock token registration error:", err)
-  })
 }

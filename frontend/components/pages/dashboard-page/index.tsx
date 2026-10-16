@@ -6,6 +6,7 @@ import { ActiveDevices } from "./active-devices"
 import { RechargeCard } from "./recharge-card"
 import { SavingsTip } from "./savings-tip"
 import { GridLifespan } from "./grid-lifespan"
+import { NotificationPermissionDialog } from "./notification-permission-dialog"
 
 interface DashboardActivity {
   type: "recharge" | "outage" | "supply"
@@ -40,6 +41,10 @@ interface DashboardPageProps {
   currentSessionStart?: string
   onCalibrateManual?: () => void
   onBuyUnits?: () => void
+  showNotificationDialog?: boolean
+  isRequestingNotification?: boolean
+  onEnableNotifications?: () => void
+  onDismissNotificationDialog?: () => void
 }
 
 export function DashboardPage({
@@ -67,7 +72,11 @@ export function DashboardPage({
   estimatedSessionMinutes = 360,
   currentSessionStart,
   onCalibrateManual,
-  onBuyUnits
+  onBuyUnits,
+  showNotificationDialog = false,
+  isRequestingNotification = false,
+  onEnableNotifications,
+  onDismissNotificationDialog
 }: DashboardPageProps) {
   const [mockDevices, setMockDevices] = React.useState([
     {
@@ -275,6 +284,13 @@ export function DashboardPage({
         <SavingsTip />
       </div>
       </div>
+
+      <NotificationPermissionDialog
+        isOpen={showNotificationDialog}
+        isRequesting={isRequestingNotification}
+        onEnable={onEnableNotifications || (() => {})}
+        onDismiss={onDismissNotificationDialog || (() => {})}
+      />
     </div>
   )
 }

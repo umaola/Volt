@@ -37,9 +37,14 @@ export const getFcmToken = async () => {
     return null
   }
   try {
+    let serviceWorkerRegistration: ServiceWorkerRegistration | undefined
+    if ("serviceWorker" in navigator) {
+      serviceWorkerRegistration = await navigator.serviceWorker.register("/firebase-messaging-sw.js")
+    }
     const messaging = getMessaging(app)
     const token = await getToken(messaging, {
       vapidKey,
+      serviceWorkerRegistration
     })
     return token
   } catch (error) {

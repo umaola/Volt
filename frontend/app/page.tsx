@@ -22,7 +22,7 @@ import { UnitPurchaseCallbackPage } from "@/components/pages/unit-purchase-callb
 import { BottomNavigation, TabType } from "@/components/design-system/bottom-navigation"
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail, onAuthStateChanged, signOut, applyActionCode, checkActionCode, signInWithCustomToken } from "firebase/auth"
 import { auth, getFcmToken, onMessageListener } from "@/lib/firebase"
-import { setupPushNotifications } from "@/lib/push-notifications"
+import { setupPushNotifications, isStandaloneMode, requestPushPermission } from "@/lib/push-notifications"
 import { toast } from "sonner"
 import { PwaInstallPrompt } from "@/components/pwa-install-prompt"
 import { usePwaInstall } from "@/hooks/use-pwa-install"
@@ -209,6 +209,9 @@ function PageContent() {
     insights: any[]
     applianceBreakdown: any[]
   } | null>(null)
+
+  const [showNotificationDialog, setShowNotificationDialog] = React.useState(false)
+  const [isRequestingNotification, setIsRequestingNotification] = React.useState(false)
 
   const navigateTo = (page: string, isBackNavigation: boolean = false) => {
     setSignupError(null)
@@ -763,6 +766,47 @@ function PageContent() {
       }
     }
   }, [pageParam, fetchDashboardData, fetchHistoryData, fetchInsightsData, authResolved])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    if (!auth.currentUser) return
+    if (pageParam !== "dashboard") return
+    if (!isStandaloneMode()) return
+    if (!("Notification" in window)) return
+    if (Notification.permission !== "default") return
+    if (sessionStorage.getItem("volt_pwa_notification_dismissed") === "true") return
+
+    const timer = setTimeout(() => {
+      setShowNotificationDialog(true)
+    }, 1200)
+
+    return () => clearTimeout(timer)
+  }, [auth.currentUser, pageParam])
+
+  const handleEnableNotifications = async () => {
+    if (!auth.currentUser) return
+    setIsRequestingNotification(true)
+    try {
+      const granted = await requestPushPermission(auth.currentUser.uid)
+      setShowNotificationDialog(false)
+      if (granted) {
+        toast.success("Notifications enabled")
+      } else if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "denied") {
+        toast.error("Notifications blocked in device settings")
+      }
+    } catch {
+      setShowNotificationDialog(false)
+    } finally {
+      setIsRequestingNotification(false)
+    }
+  }
+
+  const handleDismissNotificationDialog = () => {
+    setShowNotificationDialog(false)
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem("volt_pwa_notification_dismissed", "true")
+    }
+  }
 
   React.useEffect(() => {
     let unsubscribeMessageListener: (() => void) | undefined
@@ -2080,6 +2124,10 @@ function PageContent() {
             currentSessionStart={dashboardData?.currentSessionStart}
             onCalibrateManual={() => setShowManualCalibration(true)}
             onBuyUnits={() => setIsPurchaseUnitsOpen(true)}
+            showNotificationDialog={showNotificationDialog}
+            isRequestingNotification={isRequestingNotification}
+            onEnableNotifications={handleEnableNotifications}
+            onDismissNotificationDialog={handleDismissNotificationDialog}
           />
         )}
         {pageParam === "calculator" && (
