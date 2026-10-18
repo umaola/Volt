@@ -1789,6 +1789,7 @@ export const getDashboardData = onRequest({ cors: true }, async (request, respon
         }
 
         response.status(200).send({
+            hasOnboarded,
             userName,
             phone,
             email,

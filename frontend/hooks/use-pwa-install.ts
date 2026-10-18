@@ -13,7 +13,12 @@ const DISMISS_KEY = "volt_pwa_dismissed_at"
 
 export type PwaBrowser = "chrome" | "safari" | "firefox" | "edge" | "other"
 
-export function usePwaInstall() {
+export interface UsePwaInstallOptions {
+  enabled?: boolean
+}
+
+export function usePwaInstall(options?: UsePwaInstallOptions) {
+  const enabled = options?.enabled ?? true
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null)
   const [isOpen, setIsOpen] = useState(false)
   const [isIOS, setIsIOS] = useState(false)
@@ -40,14 +45,6 @@ export function usePwaInstall() {
       return
     }
 
-    const dismissedAt = localStorage.getItem(DISMISS_KEY)
-    if (dismissedAt) {
-      const parsed = parseInt(dismissedAt, 10)
-      if (Date.now() - parsed < 3 * 24 * 60 * 60 * 1000) {
-        return
-      }
-    }
-
     const ua = navigator.userAgent || ""
     const isAppleMobile =
       /iPad|iPhone|iPod/.test(ua) &&
@@ -70,7 +67,6 @@ export function usePwaInstall() {
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault()
       setDeferredPrompt(e as BeforeInstallPromptEvent)
-      setIsOpen(true)
     }
 
     const handleAppInstalled = () => {
@@ -83,22 +79,35 @@ export function usePwaInstall() {
     window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt)
     window.addEventListener("appinstalled", handleAppInstalled)
 
-    if (isAppleMobile && !isStandalone && !hasInstalledFlag) {
-      const timer = setTimeout(() => {
-        setIsOpen(true)
-      }, 3000)
-      return () => {
-        clearTimeout(timer)
-        window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt)
-        window.removeEventListener("appinstalled", handleAppInstalled)
-      }
-    }
-
     return () => {
       window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt)
       window.removeEventListener("appinstalled", handleAppInstalled)
     }
   }, [])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (!enabled) {
+      setIsOpen(false)
+      return
+    }
+    if (isInstalled) return
+
+    const dismissedAt = localStorage.getItem(DISMISS_KEY)
+    if (dismissedAt) {
+      const parsed = parseInt(dismissedAt, 10)
+      if (Date.now() - parsed < 3 * 24 * 60 * 60 * 1000) {
+        return
+      }
+    }
+
+    if (isIOS || deferredPrompt) {
+      const timer = setTimeout(() => {
+        setIsOpen(true)
+      }, 1500)
+      return () => clearTimeout(timer)
+    }
+  }, [enabled, isInstalled, isIOS, deferredPrompt])
 
   const install = useCallback(async () => {
     if (!deferredPrompt) return

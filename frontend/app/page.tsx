@@ -29,7 +29,7 @@ import { usePwaInstall } from "@/hooks/use-pwa-install"
 
 
 
-const SESSION_TIMEOUT_MS = 15 * 60 * 1000
+const SESSION_TIMEOUT_MS = 30 * 60 * 1000
 
 const updateSessionTimestamp = () => {
   if (typeof window !== "undefined") {
@@ -57,25 +57,35 @@ const isSessionValid = (): boolean => {
   return Date.now() - time < SESSION_TIMEOUT_MS
 }
 
+const getAuthHeaders = async (): Promise<Record<string, string>> => {
+  try {
+    if (!auth.currentUser && typeof auth.authStateReady === "function") {
+      await auth.authStateReady()
+    }
+    if (auth.currentUser) {
+      const token = await auth.currentUser.getIdToken()
+      if (token) {
+        return {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        }
+      }
+    }
+  } catch (err) {
+    console.error("Failed to get auth token:", err)
+  }
+  return { "Content-Type": "application/json" }
+}
+
 function PageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const pageParam = searchParams.get("page") || "splash"
+  const rawPageParam = searchParams.get("page")
+  const pageParam = rawPageParam || "splash"
   const slideParam = searchParams.get("slide")
   const initialSlide = slideParam ? parseInt(slideParam, 10) : 0
   const actionParam = searchParams.get("action")
   const tabParam = searchParams.get("tab")
-
-  const {
-    isOpen: isPwaInstallOpen,
-    isIOS: isPwaIOS,
-    browser: pwaBrowser,
-    isInstalled: isPwaInstalled,
-    install: handlePwaInstall,
-    dismiss: handlePwaDismiss,
-    markInstalled: handlePwaMarkInstalled,
-    promptInstall: handlePromptInstall
-  } = usePwaInstall()
 
   const [user, setUser] = React.useState<{
     name: string
@@ -98,6 +108,22 @@ function PageContent() {
     }
     lastCalibrationDate?: string
   } | null>(null)
+
+  const isPostOnboarding = Boolean(
+    user?.meterNumber &&
+    !["splash", "signup", "login", "otp", "onboarding"].includes(pageParam)
+  )
+
+  const {
+    isOpen: isPwaInstallOpen,
+    isIOS: isPwaIOS,
+    browser: pwaBrowser,
+    isInstalled: isPwaInstalled,
+    install: handlePwaInstall,
+    dismiss: handlePwaDismiss,
+    markInstalled: handlePwaMarkInstalled,
+    promptInstall: handlePromptInstall
+  } = usePwaInstall({ enabled: isPostOnboarding })
 
   const [isLoading, setIsLoading] = React.useState(false)
   const [isPurchaseUnitsOpen, setIsPurchaseUnitsOpen] = React.useState(false)
@@ -274,11 +300,12 @@ function PageContent() {
     userRef.current = user
   }, [user])
 
-  const fetchDashboardData = React.useCallback(() => {
+  const fetchDashboardData = React.useCallback(async () => {
     setIsDashboardLoading(true)
     const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
     const uid = auth.currentUser?.uid || "mock-uid"
-    fetch(`${backendUrl}/getDashboardData?uid=${uid}`)
+    const headers = await getAuthHeaders()
+    fetch(`${backendUrl}/getDashboardData?uid=${uid}`, { headers })
       .then((res) => {
         if (!res.ok) {
           return null
@@ -295,7 +322,7 @@ function PageContent() {
           setDashboardData(getLocalDashboardFallback(parsedUser || userRef.current))
           return
         }
-        if (data.hasOnboarded === false) {
+        if (data.hasOnboarded === false && !data.meterNumber) {
           setUser(null)
           if (typeof window !== "undefined") {
             localStorage.removeItem("volt_user")
@@ -313,7 +340,7 @@ function PageContent() {
         setUser((prev) => {
           const mNum = data.meterNumber || (prev?.meterNumber || "")
           const pPlan = data.subscription?.planType || (prev?.plan || "")
-          return {
+          const updated = {
             name: data.userName || (auth.currentUser?.displayName || "Amarachi Okafor"),
             phone: data.phone || (auth.currentUser?.phoneNumber || ""),
             email: data.email || (auth.currentUser?.email || ""),
@@ -327,6 +354,10 @@ function PageContent() {
             subscription: data.subscription || prev?.subscription,
             lastCalibrationDate: data.lastCalibrationDate || prev?.lastCalibrationDate
           }
+          if (typeof window !== "undefined") {
+            localStorage.setItem("volt_user", JSON.stringify(updated))
+          }
+          return updated
         })
       })
       .catch((err) => {
@@ -343,11 +374,12 @@ function PageContent() {
       })
   }, [getLocalDashboardFallback])
 
-  const fetchHistoryData = React.useCallback(() => {
+  const fetchHistoryData = React.useCallback(async () => {
     setIsHistoryLoading(true)
     const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
     const uid = auth.currentUser?.uid || "mock-uid"
-    fetch(`${backendUrl}/getHistoryData?uid=${uid}`)
+    const headers = await getAuthHeaders()
+    fetch(`${backendUrl}/getHistoryData?uid=${uid}`, { headers })
       .then((res) => {
         if (!res.ok) {
           return null
@@ -386,11 +418,12 @@ function PageContent() {
       })
   }, [])
 
-  const fetchInsightsData = React.useCallback(() => {
+  const fetchInsightsData = React.useCallback(async () => {
     setIsInsightsLoading(true)
     const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
     const uid = auth.currentUser?.uid || "mock-uid"
-    fetch(`${backendUrl}/getInsightsData?uid=${uid}`)
+    const headers = await getAuthHeaders()
+    fetch(`${backendUrl}/getInsightsData?uid=${uid}`, { headers })
       .then((res) => {
         if (!res.ok) {
           return null
@@ -502,6 +535,14 @@ function PageContent() {
         setDashboardData(null)
         setAuthResolved(true)
         setIsLoading(false)
+        if (typeof window !== "undefined") {
+          const urlParams = new URLSearchParams(window.location.search)
+          const currentPage = urlParams.get("page")
+          const isReturningUser = isStandaloneMode() || localStorage.getItem("volt_has_visited") === "true" || Boolean(localStorage.getItem("volt_user"))
+          if ((!currentPage || currentPage === "splash") && isReturningUser) {
+            navigateTo("login")
+          }
+        }
       } else {
         const urlParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null
         const isVerifying = urlParams?.get("mode") === "verifyEmail"
@@ -513,6 +554,7 @@ function PageContent() {
           setDashboardData(null)
           setAuthResolved(true)
           setIsLoading(false)
+          navigateTo("login")
           return
         }
         updateSessionTimestamp()
@@ -551,7 +593,14 @@ function PageContent() {
           }
         })
         const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
-        fetch(`${backendUrl}/getDashboardData?uid=${firebaseUser.uid}`)
+        firebaseUser.getIdToken()
+          .then((token) => {
+            const headers = {
+              "Content-Type": "application/json",
+              ...(token ? { "Authorization": `Bearer ${token}` } : {})
+            }
+            return fetch(`${backendUrl}/getDashboardData?uid=${firebaseUser.uid}`, { headers })
+          })
           .then((res) => {
             if (!res.ok) {
               return null
@@ -573,23 +622,25 @@ function PageContent() {
               localStorage.setItem("volt_appliances", JSON.stringify(data.appliances))
             }
             if (data.powerState) setPowerState(data.powerState)
-            setUser((prev) => {
-              const mNum = data.meterNumber || (prev?.meterNumber || "")
-              const pPlan = data.subscription?.planType || (prev?.plan || "")
-              return {
-                name: data.userName || firebaseUser.displayName || "Amarachi Okafor",
-                phone: data.phone || firebaseUser.phoneNumber || "",
-                email: data.email || firebaseUser.email || "",
-                meterNumber: mNum,
-                disco: data.disco || (prev?.disco || ""),
-                tariffBand: data.tariffBand || (prev?.tariffBand || ""),
-                meterType: data.meterType || (prev?.meterType || ""),
-                currentUnits: data.remainingUnits ?? (prev?.currentUnits ?? 0),
-                plan: pPlan,
-                notificationPreferences: data.notificationPreferences || prev?.notificationPreferences,
-                subscription: data.subscription || prev?.subscription
-              }
-            })
+            const mNum = data.meterNumber || ""
+            const pPlan = data.subscription?.planType || ""
+            const updated = {
+              name: data.userName || firebaseUser.displayName || "Amarachi Okafor",
+              phone: data.phone || firebaseUser.phoneNumber || "",
+              email: data.email || firebaseUser.email || "",
+              meterNumber: mNum,
+              disco: data.disco || "",
+              tariffBand: data.tariffBand || "",
+              meterType: data.meterType || "",
+              currentUnits: data.remainingUnits ?? 0,
+              plan: pPlan,
+              notificationPreferences: data.notificationPreferences,
+              subscription: data.subscription
+            }
+            setUser(updated)
+            if (typeof window !== "undefined") {
+              localStorage.setItem("volt_user", JSON.stringify(updated))
+            }
           })
           .catch((err) => {
             console.error(err)
@@ -603,6 +654,14 @@ function PageContent() {
           .finally(() => {
             setAuthResolved(true)
             setIsLoading(false)
+            if (typeof window !== "undefined") {
+              localStorage.setItem("volt_has_visited", "true")
+              const urlParams = new URLSearchParams(window.location.search)
+              const currentPage = urlParams.get("page")
+              if (!currentPage || currentPage === "splash" || currentPage === "login") {
+                navigateTo("dashboard")
+              }
+            }
           })
       }
     })
@@ -1043,12 +1102,16 @@ function PageContent() {
       if (pageParam === "history") {
         navigateTo("dashboard", true)
       } else {
-        navigateTo("splash", true)
+        const isReturningUser = typeof window !== "undefined" && (isStandaloneMode() || localStorage.getItem("volt_has_visited") === "true")
+        navigateTo(isReturningUser ? "login" : "splash", true)
       }
     }
   }
 
   const handleGetStarted = () => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("volt_has_visited", "true")
+    }
     navigateTo("signup")
   }
 
@@ -1303,7 +1366,7 @@ function PageContent() {
       })
   }
 
-  const handleOnboardingComplete = (data: {
+  const handleOnboardingComplete = async (data: {
     meterNumber: string
     disco: string
     tariffBand: string
@@ -1328,10 +1391,11 @@ function PageContent() {
     setPowerState(data.powerState)
     const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
     const uid = auth.currentUser?.uid || "mock-uid"
+    const headers = await getAuthHeaders()
 
     fetch(`${backendUrl}/saveOnboardingProfile`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({
         uid,
         meterNumber: data.meterNumber,
@@ -1344,29 +1408,43 @@ function PageContent() {
       })
     })
       .then(() => {
-        if (user) {
-          setUser({
-            ...user,
-            meterNumber: data.meterNumber,
-            disco: data.disco,
-            tariffBand: data.tariffBand,
-            meterType: data.meterType,
-            currentUnits: data.currentUnits
-          })
+        const updated = {
+          name: user?.name || auth.currentUser?.displayName || "Amarachi Okafor",
+          phone: user?.phone || auth.currentUser?.phoneNumber || "",
+          email: user?.email || auth.currentUser?.email || "",
+          meterNumber: data.meterNumber,
+          disco: data.disco,
+          tariffBand: data.tariffBand,
+          meterType: data.meterType,
+          currentUnits: data.currentUnits,
+          plan: user?.plan || "",
+          notificationPreferences: user?.notificationPreferences,
+          subscription: user?.subscription
+        }
+        setUser(updated)
+        if (typeof window !== "undefined") {
+          localStorage.setItem("volt_user", JSON.stringify(updated))
         }
         navigateTo("dashboard")
       })
       .catch((err) => {
         console.error(err)
-        if (user) {
-          setUser({
-            ...user,
-            meterNumber: data.meterNumber,
-            disco: data.disco,
-            tariffBand: data.tariffBand,
-            meterType: data.meterType,
-            currentUnits: data.currentUnits
-          })
+        const updated = {
+          name: user?.name || auth.currentUser?.displayName || "Amarachi Okafor",
+          phone: user?.phone || auth.currentUser?.phoneNumber || "",
+          email: user?.email || auth.currentUser?.email || "",
+          meterNumber: data.meterNumber,
+          disco: data.disco,
+          tariffBand: data.tariffBand,
+          meterType: data.meterType,
+          currentUnits: data.currentUnits,
+          plan: user?.plan || "",
+          notificationPreferences: user?.notificationPreferences,
+          subscription: user?.subscription
+        }
+        setUser(updated)
+        if (typeof window !== "undefined") {
+          localStorage.setItem("volt_user", JSON.stringify(updated))
         }
         navigateTo("dashboard")
       })
@@ -1427,9 +1505,10 @@ function PageContent() {
     const uid = auth.currentUser?.uid || "mock-uid"
 
     try {
+      const headers = await getAuthHeaders()
       const res = await fetch(`${backendUrl}/calibrateMeterUnits`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ uid, ...payload })
       })
 
@@ -1459,14 +1538,15 @@ function PageContent() {
     }
   }
 
-  const handleActivateTrial = (plan: "monthly" | "annual", cardData: any) => {
+  const handleActivateTrial = async (plan: "monthly" | "annual", cardData: any) => {
     setIsLoading(true)
     const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
     const uid = auth.currentUser?.uid || "mock-uid"
+    const headers = await getAuthHeaders()
 
     fetch(`${backendUrl}/verifyAndStartTrial`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({
         uid,
         plan,
@@ -1503,9 +1583,10 @@ function PageContent() {
     const uid = auth.currentUser?.uid || "mock-uid"
 
     try {
+      const headers = await getAuthHeaders()
       const res = await fetch(`${backendUrl}/cancelSubscription`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ uid })
       })
 
@@ -1594,11 +1675,14 @@ function PageContent() {
 
     const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
     const uid = auth.currentUser?.uid || "mock-uid"
-    fetch(`${backendUrl}/logPowerSupply`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ uid, state })
-    })
+    getAuthHeaders()
+      .then((headers) => {
+        return fetch(`${backendUrl}/logPowerSupply`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ uid, state })
+        })
+      })
       .then((res) => {
         if (!res.ok) {
           return null
@@ -1680,31 +1764,33 @@ function PageContent() {
     const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
     const uid = auth.currentUser?.uid || "mock-uid"
 
-    fetch(`${backendUrl}/updateProfile`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        uid,
-        phone: updatedProfile.phone,
-        meterNumber: updatedProfile.meterNumber,
-        disco: updatedProfile.disco,
-        tariffBand: updatedProfile.tariffBand,
-        meterType: updatedProfile.meterType
+    getAuthHeaders().then((headers) => {
+      fetch(`${backendUrl}/updateProfile`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          uid,
+          phone: updatedProfile.phone,
+          meterNumber: updatedProfile.meterNumber,
+          disco: updatedProfile.disco,
+          tariffBand: updatedProfile.tariffBand,
+          meterType: updatedProfile.meterType
+        })
       })
+        .then((res) => {
+          if (!res.ok) {
+            throw new Error("Failed to update profile")
+          }
+          return res.json()
+        })
+        .then(() => {
+          fetchDashboardData()
+        })
+        .catch((err) => {
+          console.error(err)
+          setIsDashboardLoading(false)
+        })
     })
-      .then((res) => {
-        if (!res.ok) {
-          throw new Error("Failed to update profile")
-        }
-        return res.json()
-      })
-      .then(() => {
-        fetchDashboardData()
-      })
-      .catch((err) => {
-        console.error(err)
-        setIsDashboardLoading(false)
-      })
   }
 
   const handleAddAppliance = (appliance: { name: string; wattage: number; hours: number }) => {
@@ -1724,33 +1810,35 @@ function PageContent() {
 
     const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
     const uid = auth.currentUser?.uid || "mock-uid"
-    fetch(`${backendUrl}/addAppliance`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        uid,
-        name: appliance.name,
-        wattage: appliance.wattage,
-        hours: appliance.hours
+    getAuthHeaders().then((headers) => {
+      fetch(`${backendUrl}/addAppliance`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          uid,
+          name: appliance.name,
+          wattage: appliance.wattage,
+          hours: appliance.hours
+        })
       })
+        .then((res) => {
+          if (!res.ok) {
+            return null
+          }
+          return res.json()
+        })
+        .then((data) => {
+          if (!data) return
+          fetchDashboardData()
+        })
+        .catch((err) => {
+          console.error(err)
+          fetchDashboardData()
+        })
+        .finally(() => {
+          setIsSubmitting(false)
+        })
     })
-      .then((res) => {
-        if (!res.ok) {
-          return null
-        }
-        return res.json()
-      })
-      .then((data) => {
-        if (!data) return
-        fetchDashboardData()
-      })
-      .catch((err) => {
-        console.error(err)
-        fetchDashboardData()
-      })
-      .finally(() => {
-        setIsSubmitting(false)
-      })
   }
 
   const handleEditAppliance = (appliance: { name: string; wattage: number; hours: number }) => {
@@ -1770,33 +1858,35 @@ function PageContent() {
 
     const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
     const uid = auth.currentUser?.uid || "mock-uid"
-    fetch(`${backendUrl}/updateAppliance`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        uid,
-        name: appliance.name,
-        wattage: appliance.wattage,
-        hours: appliance.hours
+    getAuthHeaders().then((headers) => {
+      fetch(`${backendUrl}/updateAppliance`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          uid,
+          name: appliance.name,
+          wattage: appliance.wattage,
+          hours: appliance.hours
+        })
       })
+        .then((res) => {
+          if (!res.ok) {
+            return null
+          }
+          return res.json()
+        })
+        .then((data) => {
+          if (!data) return
+          fetchDashboardData()
+        })
+        .catch((err) => {
+          console.error(err)
+          fetchDashboardData()
+        })
+        .finally(() => {
+          setIsSubmitting(false)
+        })
     })
-      .then((res) => {
-        if (!res.ok) {
-          return null
-        }
-        return res.json()
-      })
-      .then((data) => {
-        if (!data) return
-        fetchDashboardData()
-      })
-      .catch((err) => {
-        console.error(err)
-        fetchDashboardData()
-      })
-      .finally(() => {
-        setIsSubmitting(false)
-      })
   }
 
   const handleDeleteAppliance = (name: string) => {
@@ -1816,31 +1906,33 @@ function PageContent() {
 
     const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
     const uid = auth.currentUser?.uid || "mock-uid"
-    fetch(`${backendUrl}/deleteAppliance`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        uid,
-        name
+    getAuthHeaders().then((headers) => {
+      fetch(`${backendUrl}/deleteAppliance`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          uid,
+          name
+        })
       })
+        .then((res) => {
+          if (!res.ok) {
+            return null
+          }
+          return res.json()
+        })
+        .then((data) => {
+          if (!data) return
+          fetchDashboardData()
+        })
+        .catch((err) => {
+          console.error(err)
+          fetchDashboardData()
+        })
+        .finally(() => {
+          setIsSubmitting(false)
+        })
     })
-      .then((res) => {
-        if (!res.ok) {
-          return null
-        }
-        return res.json()
-      })
-      .then((data) => {
-        if (!data) return
-        fetchDashboardData()
-      })
-      .catch((err) => {
-        console.error(err)
-        fetchDashboardData()
-      })
-      .finally(() => {
-        setIsSubmitting(false)
-      })
   }
 
   const handleEditRecharge = (id: string, amount: number, units: number) => {
@@ -1864,37 +1956,39 @@ function PageContent() {
 
     const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
     const uid = auth.currentUser?.uid || "mock-uid"
-    fetch(`${backendUrl}/updateRecharge`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        uid,
-        rechargeId: id,
-        amount,
-        units
+    getAuthHeaders().then((headers) => {
+      fetch(`${backendUrl}/updateRecharge`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          uid,
+          rechargeId: id,
+          amount,
+          units
+        })
       })
+        .then((res) => {
+          if (!res.ok) {
+            return null
+          }
+          return res.json()
+        })
+        .then((data) => {
+          if (data && data.success && user) {
+            setUser({ ...user, currentUnits: data.newUnits })
+          }
+          fetchDashboardData()
+          fetchHistoryData()
+        })
+        .catch((err) => {
+          console.error(err)
+          fetchDashboardData()
+          fetchHistoryData()
+        })
+        .finally(() => {
+          setIsSubmitting(false)
+        })
     })
-      .then((res) => {
-        if (!res.ok) {
-          return null
-        }
-        return res.json()
-      })
-      .then((data) => {
-        if (data && data.success && user) {
-          setUser({ ...user, currentUnits: data.newUnits })
-        }
-        fetchDashboardData()
-        fetchHistoryData()
-      })
-      .catch((err) => {
-        console.error(err)
-        fetchDashboardData()
-        fetchHistoryData()
-      })
-      .finally(() => {
-        setIsSubmitting(false)
-      })
   }
 
   const handleDeleteRecharge = (id: string) => {
@@ -1916,35 +2010,37 @@ function PageContent() {
 
     const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
     const uid = auth.currentUser?.uid || "mock-uid"
-    fetch(`${backendUrl}/deleteRecharge`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        uid,
-        rechargeId: id
+    getAuthHeaders().then((headers) => {
+      fetch(`${backendUrl}/deleteRecharge`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          uid,
+          rechargeId: id
+        })
       })
+        .then((res) => {
+          if (!res.ok) {
+            return null
+          }
+          return res.json()
+        })
+        .then((data) => {
+          if (data && data.success && user) {
+            setUser({ ...user, currentUnits: data.newUnits })
+          }
+          fetchDashboardData()
+          fetchHistoryData()
+        })
+        .catch((err) => {
+          console.error(err)
+          fetchDashboardData()
+          fetchHistoryData()
+        })
+        .finally(() => {
+          setIsSubmitting(false)
+        })
     })
-      .then((res) => {
-        if (!res.ok) {
-          return null
-        }
-        return res.json()
-      })
-      .then((data) => {
-        if (data && data.success && user) {
-          setUser({ ...user, currentUnits: data.newUnits })
-        }
-        fetchDashboardData()
-        fetchHistoryData()
-      })
-      .catch((err) => {
-        console.error(err)
-        fetchDashboardData()
-        fetchHistoryData()
-      })
-      .finally(() => {
-        setIsSubmitting(false)
-      })
   }
 
   const handleUpdatePreferences = (prefs: { dailyReminders: boolean; lowUnitAlerts: boolean }) => {
@@ -1952,34 +2048,36 @@ function PageContent() {
     const backendUrl = process.env.NEXT_PUBLIC_FIREBASE_FUNCTION_URL
     const uid = auth.currentUser?.uid || "mock-uid"
 
-    fetch(`${backendUrl}/updateNotificationPreferences`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        uid,
-        dailyReminders: prefs.dailyReminders,
-        lowUnitAlerts: prefs.lowUnitAlerts
+    getAuthHeaders().then((headers) => {
+      fetch(`${backendUrl}/updateNotificationPreferences`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          uid,
+          dailyReminders: prefs.dailyReminders,
+          lowUnitAlerts: prefs.lowUnitAlerts
+        })
       })
+        .then((res) => {
+          if (!res.ok) {
+            return null
+          }
+          return res.json()
+        })
+        .catch((err) => {
+          console.error(err)
+        })
+        .finally(() => {
+          setIsSubmitting(false)
+        })
     })
-      .then((res) => {
-        if (!res.ok) {
-          return null
-        }
-        return res.json()
-      })
-      .catch((err) => {
-        console.error(err)
-      })
-      .finally(() => {
-        setIsSubmitting(false)
-      })
   }
 
   const handleLogout = () => {
     clearUserSession()
     setUser(null)
     setDashboardData(null)
-    navigateTo("splash")
+    navigateTo("login")
   }
 
   const handleTabChange = (tab: TabType) => {
@@ -2185,22 +2283,23 @@ function PageContent() {
               const uid = auth.currentUser?.uid || "mock-uid"
               const currentTariff = dashboardData?.tariffRate ?? 209.50
 
-              fetch(`${backendUrl}/logRecharge`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  uid,
-                  amount,
-                  units,
-                  tariffRate: currentTariff
+              getAuthHeaders().then((headers) => {
+                fetch(`${backendUrl}/logRecharge`, {
+                  method: "POST",
+                  headers,
+                  body: JSON.stringify({
+                    uid,
+                    amount,
+                    units,
+                    tariffRate: currentTariff
+                  })
                 })
-              })
-                .then((res) => {
-                  if (!res.ok) {
-                    return null
-                  }
-                  return res.json()
-                })
+                  .then((res) => {
+                    if (!res.ok) {
+                      return null
+                    }
+                    return res.json()
+                  })
                 .then((data) => {
                   if (!data) return
                   if (data.success && user) {
@@ -2218,6 +2317,7 @@ function PageContent() {
                 .finally(() => {
                   setIsSubmitting(false)
                 })
+              })
             }}
             isLoading={isDashboardLoading || !dashboardData}
             isSubmitting={isSubmitting}
