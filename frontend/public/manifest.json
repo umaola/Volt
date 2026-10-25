@@ -33,21 +33,24 @@
       "short_name": "Power",
       "description": "Log power ON or OFF",
       "url": "/?action=toggle",
-      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+      "icons": [
+        {
+          "src": "/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
     },
     {
       "name": "Calibrate Meter",
       "short_name": "Calibrate",
       "description": "Synchronize meter units",
       "url": "/?action=calibrate",
-      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
-    },
-    {
-      "name": "Buy Units",
-      "short_name": "Buy Units",
-      "description": "Purchase electricity units",
-      "url": "/?tab=recharge",
-      "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }]
+      "icons": [
+        {
+          "src": "/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
     }
   ]
 }

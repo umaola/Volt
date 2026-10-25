@@ -13,8 +13,18 @@ firebase.initializeApp({
 const messaging = firebase.messaging();
 
 messaging.onBackgroundMessage((payload) => {
-  self.registration.showNotification(payload.notification.title, {
-    body: payload.notification.body,
-    icon: "/favicon.ico"
+  const notif = payload.notification || {};
+  let title = notif.title || "";
+  let body = notif.body || "";
+
+  if (title === "Volt" || !title) {
+    title = body;
+    body = "";
+  }
+
+  self.registration.showNotification(title, {
+    body: body,
+    icon: "/icon-192.png",
+    badge: "/icon-192.png"
   });
 });
