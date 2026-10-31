@@ -8,7 +8,7 @@ import { SignupPage } from "@/components/pages/signup-page"
 import { OtpPage } from "@/components/pages/otp-page"
 import { OnboardingPage } from "@/components/pages/onboarding-page"
 import { SubscriptionPage } from "@/components/pages/subscription-page"
-import { DashboardPage } from "@/components/pages/dashboard-page"
+import { DashboardPage, InactivityCalibrationDialog } from "@/components/pages/dashboard-page"
 import { CalculatorPage } from "@/components/pages/calculator-page"
 import { InsightsPage } from "@/components/pages/insights-page"
 import { ProfilePage } from "@/components/pages/profile-page"
@@ -1066,25 +1066,52 @@ function PageContent() {
       if (todayStr !== onboardingDateStr && lastCalDate !== todayStr) {
         const cachedCalibratedToday = localStorage.getItem(`volt_calibrated_${todayStr}`)
         if (!cachedCalibratedToday) {
-          const yesterday = new Date()
-          yesterday.setDate(yesterday.getDate() - 1)
-          const yesterdayStr = yesterday.toISOString().split("T")[0]
-
+          const storedLastActive = typeof window !== "undefined" ? localStorage.getItem("volt_last_active_date") : null
           const localLogsStr = typeof window !== "undefined" ? localStorage.getItem("volt_power_logs") : null
           const localLogs = localLogsStr ? JSON.parse(localLogsStr) : (historyData?.powerLogs || [])
-          const hasToggledPowerYesterday = localLogs.some((l: any) => {
-            const onDate = (l.powerOn || l.power_on || "").split("T")[0]
-            const offDate = (l.powerOff || l.power_off || "").split("T")[0]
-            return onDate === yesterdayStr || offDate === yesterdayStr
-          })
+          const logDates = localLogs.map((l: any) => (l.powerOff || l.power_off || l.powerOn || l.power_on || "").split("T")[0]).filter(Boolean)
 
-          if (hasToggledPowerYesterday) {
+          const candidateDates = [storedLastActive, ...logDates, lastCalDate, onboardingDateStr]
+            .filter((d): d is string => typeof d === "string" && d.length >= 10 && d < todayStr)
+            .sort((a, b) => b.localeCompare(a))
+
+          const latestPriorDate = candidateDates[0] || null
+
+          let diffDays = 1
+          if (latestPriorDate) {
+            const todayParts = todayStr.split("-").map(Number)
+            const priorParts = latestPriorDate.split("-").map(Number)
+            const todayUtc = Date.UTC(todayParts[0], todayParts[1] - 1, todayParts[2])
+            const priorUtc = Date.UTC(priorParts[0], priorParts[1] - 1, priorParts[2])
+            diffDays = Math.max(1, Math.round((todayUtc - priorUtc) / (1000 * 60 * 60 * 24)))
+          }
+
+          if (diffDays >= 2) {
+            setInactivityDays(diffDays)
+            setShowInactivityPopup(true)
             localStorage.setItem(`volt_calibrated_${todayStr}`, "true")
           } else {
-            setShowCalibrationPopup(true)
-            localStorage.setItem(`volt_calibrated_${todayStr}`, "true")
+            const yesterday = new Date()
+            yesterday.setDate(yesterday.getDate() - 1)
+            const yesterdayStr = yesterday.toISOString().split("T")[0]
+
+            const hasToggledPowerYesterday = localLogs.some((l: any) => {
+              const onDate = (l.powerOn || l.power_on || "").split("T")[0]
+              const offDate = (l.powerOff || l.power_off || "").split("T")[0]
+              return onDate === yesterdayStr || offDate === yesterdayStr
+            })
+
+            if (hasToggledPowerYesterday) {
+              localStorage.setItem(`volt_calibrated_${todayStr}`, "true")
+            } else {
+              setShowCalibrationPopup(true)
+              localStorage.setItem(`volt_calibrated_${todayStr}`, "true")
+            }
           }
         }
+      }
+      if (typeof window !== "undefined") {
+        localStorage.setItem("volt_last_active_date", todayStr)
       }
     }
   }, [pageParam, dashboardData, user?.meterNumber, historyData?.powerLogs])
@@ -1456,6 +1483,9 @@ function PageContent() {
   const [isCancelling, setIsCancelling] = React.useState(false)
   const [showCalibrationPopup, setShowCalibrationPopup] = React.useState(false)
   const [showManualCalibration, setShowManualCalibration] = React.useState(false)
+  const [showInactivityPopup, setShowInactivityPopup] = React.useState(false)
+  const [inactivityDays, setInactivityDays] = React.useState(2)
+  const [isCalibratingInactivity, setIsCalibratingInactivity] = React.useState(false)
   const [lightYesterday, setLightYesterday] = React.useState(true)
   const [lightHours, setLightHours] = React.useState(12)
   const [manualUnitsInput, setManualUnitsInput] = React.useState("")
@@ -2325,7 +2355,6 @@ function PageContent() {
             isHistoryLoading={isHistoryLoading}
             onEditRecharge={handleEditRecharge}
             onDeleteRecharge={handleDeleteRecharge}
-            onBuyUnits={() => setIsPurchaseUnitsOpen(true)}
           />
         )}
         {pageParam === "insights" && (
@@ -2500,6 +2529,28 @@ function PageContent() {
           </div>
         </div>
       )}
+
+      <InactivityCalibrationDialog
+        isOpen={showInactivityPopup}
+        daysInactive={inactivityDays}
+        currentEstimatedUnits={dashboardData?.remainingUnits ?? user?.currentUnits}
+        isSubmitting={isCalibratingInactivity}
+        onSync={async (manualUnits) => {
+          setIsCalibratingInactivity(true)
+          try {
+            await handleCalibrateUnits({
+              type: "manual",
+              manualUnits
+            })
+            setShowInactivityPopup(false)
+          } finally {
+            setIsCalibratingInactivity(false)
+          }
+        }}
+        onDismiss={() => {
+          setShowInactivityPopup(false)
+        }}
+      />
 
       {showManualCalibration && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6 select-none animate-in fade-in duration-200">

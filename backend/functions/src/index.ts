@@ -1861,6 +1861,11 @@ export const logRecharge = onRequest({ cors: true }, async (request, response) =
             updated_at: new Date().toISOString()
         });
 
+        batch.set(db.collection("users").doc(uid), {
+            current_units: Number(newUnits.toFixed(2)),
+            updated_at: new Date().toISOString()
+        }, { merge: true });
+
         await batch.commit();
 
         response.status(200).send({ success: true, newUnits: Number(newUnits.toFixed(2)) });
@@ -2056,39 +2061,7 @@ export const checkAndSendAlerts = onRequest({ cors: true }, async (request, resp
                 }
 
                 if (alertType) {
-                    const notifId = db.collection("notifications").doc().id;
-                    const notifRef = db.collection("notifications").doc(notifId);
-                    batch.set(notifRef, {
-                        id: notifId,
-                        user_id: uid,
-                        title: alertTitle,
-                        body: alertBody,
-                        notification_type: alertType,
-                        status: "sent",
-                        sent_at: now.toISOString(),
-                        created_at: now.toISOString()
-                    });
-
-                    const tokensSnapshot = await db.collection("device_tokens")
-                        .where("user_id", "==", uid)
-                        .get();
-
-                    for (const tokenDoc of tokensSnapshot.docs) {
-                        const token = tokenDoc.data().device_token;
-                        if (token) {
-                            try {
-                                await getMessaging().send({
-                                    notification: {
-                                        title: alertTitle,
-                                        body: alertBody
-                                    },
-                                    token
-                                });
-                            } catch (fcmError) {
-                                logger.warn(`FCM message fail for token ${token}:`, fcmError);
-                            }
-                        }
-                    }
+                    await sendPushToUser(uid, alertTitle, alertBody, alertType);
                 }
             }
         }
@@ -2110,42 +2083,9 @@ export const checkAndSendAlerts = onRequest({ cors: true }, async (request, resp
 
             if (!uid) continue;
 
-            const notifId = db.collection("notifications").doc().id;
-            const notifRef = db.collection("notifications").doc(notifId);
             const alertTitle = "Your Free Trial is Ending";
             const alertBody = "Your 30-day trial of Volt premium ends soon. Keep tracking appliances and outages uninterrupted by subscribing today.";
-
-            batch.set(notifRef, {
-                id: notifId,
-                user_id: uid,
-                title: alertTitle,
-                body: alertBody,
-                notification_type: "trial_ending",
-                status: "sent",
-                sent_at: now.toISOString(),
-                created_at: now.toISOString()
-            });
-
-            const tokensSnapshot = await db.collection("device_tokens")
-                .where("user_id", "==", uid)
-                .get();
-
-            for (const tokenDoc of tokensSnapshot.docs) {
-                const token = tokenDoc.data().device_token;
-                if (token) {
-                    try {
-                        await getMessaging().send({
-                            notification: {
-                                title: alertTitle,
-                                body: alertBody
-                            },
-                            token
-                        });
-                    } catch (fcmError) {
-                        logger.warn(`FCM message fail for token ${token}:`, fcmError);
-                    }
-                }
-            }
+            await sendPushToUser(uid, alertTitle, alertBody, "trial_ending");
         }
 
         const expiredSubsSnapshot = await db.collection("subscriptions")
@@ -3931,6 +3871,11 @@ export const calibrateMeterUnits = onRequest({ cors: true }, async (request, res
             updated_at: new Date().toISOString()
         });
 
+        batch.set(db.collection("users").doc(uid), {
+            current_units: Number(newUnits.toFixed(2)),
+            updated_at: new Date().toISOString()
+        }, { merge: true });
+
         // Store in user recalibrations subcollection
         const userRecalRef = db.collection("users").doc(uid).collection("recalibrations").doc(calibrationId);
         batch.set(userRecalRef, {
@@ -4640,6 +4585,13 @@ export const scheduledDailyMeterDeduction = onSchedule("0 0 * * *", async (event
                 updated_at: new Date().toISOString()
             }, { merge: true });
 
+            if (userData.meter_number) {
+                await db.collection("meters").doc(userData.meter_number).set({
+                    current_units: newUnits,
+                    updated_at: new Date().toISOString()
+                }, { merge: true });
+            }
+
             const todayStr = new Date().toISOString().split("T")[0];
             await db.collection("users").doc(uid).collection("daily_consumption").doc(todayStr).set({
                 date: todayStr,
@@ -4649,18 +4601,12 @@ export const scheduledDailyMeterDeduction = onSchedule("0 0 * * *", async (event
                 created_at: new Date().toISOString()
             }, { merge: true });
 
-            const notifRef = db.collection("users").doc(uid).collection("notifications").doc();
-            await notifRef.set({
-                id: notifRef.id,
-                title: "Daily Electricity Unit Deduction",
-                message: `Estimated daily consumption of ${dailyKwh} kWh deducted. Remaining balance: ${newUnits} kWh.`,
-                type: "daily_deduction",
-                deductedUnits: dailyKwh,
-                remainingUnits: newUnits,
-                action: "recalibrate",
-                created_at: new Date().toISOString(),
-                read: false
-            });
+            await sendPushToUser(
+                uid,
+                "Daily Electricity Unit Deduction",
+                `Estimated daily consumption of ${dailyKwh} kWh deducted. Remaining balance: ${newUnits} kWh.`,
+                "daily_deduction"
+            );
         }
         logger.info("Scheduled daily meter deduction completed successfully.");
 
@@ -4680,27 +4626,21 @@ export const onMeterUnitsUpdated = onDocumentUpdated("users/{uid}", async (event
         const uid = event.params.uid;
 
         if (afterUnits < 20 && beforeUnits >= 20) {
-            const notifRef = db.collection("users").doc(uid).collection("notifications").doc();
-            await notifRef.set({
-                id: notifRef.id,
-                title: "Low Units Warning",
-                message: `Your meter balance has dropped to ${afterUnits} kWh.`,
-                type: "low_units",
-                created_at: new Date().toISOString(),
-                read: false
-            });
+            await sendPushToUser(
+                uid,
+                "Low Units Warning",
+                `Your meter balance has dropped to ${afterUnits} kWh.`,
+                "low_units"
+            );
         }
 
         if (afterUnits < 11 && beforeUnits >= 11) {
-            const notifRef = db.collection("users").doc(uid).collection("notifications").doc();
-            await notifRef.set({
-                id: notifRef.id,
-                title: "Critical Unit Balance Alert",
-                message: `CRITICAL: Your meter balance is down to ${afterUnits} kWh!`,
-                type: "recharge_critical",
-                created_at: new Date().toISOString(),
-                read: false
-            });
+            await sendPushToUser(
+                uid,
+                "Critical Unit Balance Alert",
+                `CRITICAL: Your meter balance is down to ${afterUnits} kWh!`,
+                "critical_low_units"
+            );
         }
     } catch (err) {
         logger.error("Error in onMeterUnitsUpdated:", err);
@@ -4885,9 +4825,15 @@ export async function sendPushToUser(uid: string, title: string, body: string, t
             .where("user_id", "==", uid)
             .get();
 
+        const seenTokens = new Set<string>();
         for (const tokenDoc of tokensSnapshot.docs) {
             const token = tokenDoc.data().device_token;
             if (token && !token.startsWith("token_mock_")) {
+                if (seenTokens.has(token)) {
+                    await tokenDoc.ref.delete().catch(() => null);
+                    continue;
+                }
+                seenTokens.add(token);
                 try {
                     const payload: any = {
                         notification: finalBody
@@ -4897,7 +4843,15 @@ export async function sendPushToUser(uid: string, title: string, body: string, t
                         token
                     };
                     await getMessaging().send(payload);
-                } catch (fcmErr) {
+                } catch (fcmErr: any) {
+                    if (
+                        fcmErr?.code === "messaging/registration-token-not-registered" ||
+                        fcmErr?.code === "messaging/invalid-registration-token" ||
+                        fcmErr?.errorInfo?.code === "messaging/registration-token-not-registered" ||
+                        fcmErr?.errorInfo?.code === "messaging/invalid-registration-token"
+                    ) {
+                        await tokenDoc.ref.delete().catch(() => null);
+                    }
                     logger.warn(`Failed sending FCM to token ${token} for user ${uid}:`, fcmErr);
                 }
             }
@@ -5075,14 +5029,20 @@ export const scheduledTwentyMinuteReminders = onSchedule("*/20 * * * *", async (
         for (const mDoc of metersSnapshot.docs) {
             const mData = mDoc.data();
             const uid = mData.user_id;
-            const units = Number(mData.current_units || 0);
-            if (!uid || units <= 0 || units > 20) continue;
+            if (!uid) continue;
+
+            const userDoc = await db.collection("users").doc(uid).get();
+            const userData = userDoc.data();
+            const units = userData?.current_units !== undefined ? Number(userData.current_units) : Number(mData.current_units || 0);
+            if (units <= 0 || units > 20) continue;
+
+            if (userData?.current_units !== undefined && mData.current_units !== userData.current_units) {
+                await mDoc.ref.set({ current_units: userData.current_units }, { merge: true });
+            }
 
             const prefsDoc = await db.collection("notification_preferences").doc(uid).get();
             if (prefsDoc.exists && prefsDoc.data()?.low_unit_alerts === false) continue;
 
-            const userDoc = await db.collection("users").doc(uid).get();
-            const userData = userDoc.data();
             const lastAlertAt = userData?.last_low_unit_alert_at;
             const lastAlertLevel = userData?.last_low_unit_alert_level;
 

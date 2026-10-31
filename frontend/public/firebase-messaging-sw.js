@@ -13,9 +13,13 @@ firebase.initializeApp({
 const messaging = firebase.messaging();
 
 messaging.onBackgroundMessage((payload) => {
-  const notif = payload.notification || {};
-  let title = notif.title || "";
-  let body = notif.body || "";
+  if (payload.notification) {
+    return;
+  }
+
+  const data = payload.data || {};
+  let title = data.title || "Volt";
+  let body = data.body || "";
 
   if (title === "Volt" || !title) {
     title = body;
@@ -25,6 +29,24 @@ messaging.onBackgroundMessage((payload) => {
   self.registration.showNotification(title, {
     body: body,
     icon: "/icon-192.png",
-    badge: "/icon-192.png"
+    badge: "/icon-192.png",
+    data: data
   });
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const urlToOpen = event.notification?.data?.url || "/?page=dashboard";
+  event.waitUntil(
+    clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if (client.url && "focus" in client) {
+          return client.focus();
+        }
+      }
+      if (clients.openWindow) {
+        return clients.openWindow(urlToOpen);
+      }
+    })
+  );
 });

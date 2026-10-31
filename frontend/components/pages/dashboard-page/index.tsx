@@ -294,3 +294,6 @@ export function DashboardPage({
     </div>
   )
 }
+
+export { InactivityCalibrationDialog, InactivityCalibrationDialogSkeleton } from "./inactivity-calibration-dialog"
+export type { InactivityCalibrationDialogProps } from "./inactivity-calibration-dialog"
