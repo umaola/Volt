@@ -2391,6 +2391,7 @@ function PageContent() {
             isSubmitting={isSubmitting}
             isPwaInstalled={isPwaInstalled}
             onPromptInstall={handlePromptInstall}
+            supportUrl="https://wa.me/message/3OM6TABL45JDK1"
             onDeleteAccount={async () => {
               try {
                 if (!auth.currentUser) return

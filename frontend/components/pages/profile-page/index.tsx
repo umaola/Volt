@@ -4,6 +4,9 @@ import { PrimaryButton } from "@/components/design-system/button"
 import { StandardCard } from "@/components/design-system/card"
 import { IconUser, IconCreditCard, IconBell, IconShieldLock, IconCheck, IconArrowUpRight, IconPencil, IconX } from "@tabler/icons-react"
 import { Switch } from "@/components/ui/switch"
+import { ContactSupportCard, ContactSupportCardSkeleton } from "./contact-support-card"
+
+export { ContactSupportCard, ContactSupportCardSkeleton }
 
 interface ProfilePageProps {
   userData: {
@@ -41,6 +44,8 @@ interface ProfilePageProps {
   onDeleteAccount?: () => Promise<void>
   isPwaInstalled?: boolean
   onPromptInstall?: () => void
+  supportUrl?: string
+  onContactSupport?: () => void
 }
 
 export function ProfilePage({
@@ -56,7 +61,9 @@ export function ProfilePage({
   isCancelling = false,
   onDeleteAccount,
   isPwaInstalled = false,
-  onPromptInstall
+  onPromptInstall,
+  supportUrl,
+  onContactSupport
 }: ProfilePageProps) {
   const [phone, setPhone] = React.useState(userData.phone)
   const [meterNumber, setMeterNumber] = React.useState(userData.meterNumber)
@@ -453,6 +460,12 @@ export function ProfilePage({
             </button>
           </div>
         </StandardCard>
+
+        <ContactSupportCard
+          supportUrl={supportUrl}
+          onContactSupport={onContactSupport}
+          isLoading={isLoading}
+        />
 
 
         <div className="flex flex-col items-center gap-3 mt-2 mb-6">
