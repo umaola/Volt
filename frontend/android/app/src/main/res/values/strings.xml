@@ -2,6 +2,6 @@
 <resources>
     <string name="app_name">Volt</string>
     <string name="title_activity_main">Volt</string>
-    <string name="package_name">com.nepa.app</string>
-    <string name="custom_url_scheme">com.nepa.app</string>
+    <string name="package_name">com.voltapp.africa</string>
+    <string name="custom_url_scheme">com.voltapp.africa</string>
 </resources>
