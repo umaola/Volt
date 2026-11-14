@@ -16,8 +16,19 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            if (file('volt-release.keystore').exists()) {
+                storeFile file('volt-release.keystore')
+                storePassword System.getenv("KEYSTORE_PASSWORD") ?: "voltApp2026!"
+                keyAlias System.getenv("KEY_ALIAS") ?: "volt"
+                keyPassword System.getenv("KEY_PASSWORD") ?: "voltApp2026!"
+            }
+        }
+    }
     buildTypes {
         release {
+            signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
