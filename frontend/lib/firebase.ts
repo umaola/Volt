@@ -3,12 +3,12 @@ import { getAuth, connectAuthEmulator } from "firebase/auth"
 import { getMessaging, getToken, onMessage, isSupported } from "firebase/messaging"
 
 const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "AIzaSyC7Qyb6hVrX4t8iMadEl4WIC94hPQiuvwI",
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || "volt-94f9f.firebaseapp.com",
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "volt-94f9f",
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || "volt-94f9f.firebasestorage.app",
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || "370469332401",
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID || "1:370469332401:web:6ed1e408b07cf9cdcb8990",
 }
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp()
@@ -32,7 +32,7 @@ export const getFcmToken = async () => {
   if (!supported) {
     return null
   }
-  const vapidKey = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY
+  const vapidKey = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY || "BEWnezsCJKyItO0cqpq-V-NN6Z50ssGz0pc39GklElmj878rU5ypcI3H5blkhFKGLxIVA8BRqHKy-XyF7VwTs7c"
   if (!vapidKey) {
     return null
   }
