@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "370469332401",
+    "project_id": "volt-94f9f",
+    "storage_bucket": "volt-94f9f.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:370469332401:android:d4617415292eae1bcb8990",
+        "android_client_info": {
+          "package_name": "com.voltapp.africa"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBLg3SpmK5iEyPu4AcGpXyC2xgdXI5u6aI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
