@@ -1,0 +1,46 @@
+Never get caught off guard by a zero meter balance again.
+
+Volt is Nigeria's premier electricity intelligence and prepaid meter tracking app. Designed specifically for Nigerian homes, estates, and businesses, Volt takes the guesswork out of electricity consumption, tariff rates, and meter recharges.
+
+Whether you are on Band A, B, C, D, or E with IKEDC, EKEDC, AEDC, IBEDC, or any other DISCO, Volt gives you full visibility and control over every kilowatt-hour (kWh) you consume.
+
+KEY FEATURES:
+
+⚡ Smart Prepaid Meter Tracking
+Track your remaining prepaid meter units in real time directly from your phone. No more walking over to your meter box or getting surprised by sudden power cuts when units run dry.
+
+🔌 Appliance Consumption Breakdown
+Ever wondered why your units drain so fast? Add your home appliances—air conditioners, refrigerators, water heaters, pumping machines, TVs, and fans—to see exactly how many units each appliance consumes per day and month. Make informed decisions and cut wasteful energy costs.
+
+💡 Accurate Tariff & Recharge Calculator
+Know exactly how many units (kWh) you will receive before you recharge. Select your DISCO and tariff band (A–E) and enter any amount in Naira (₦) to calculate your exact units after VAT and regulatory deductions.
+
+🔔 Low Unit & Power Availability Alerts
+Receive timely smart notifications when your balance drops below 20 units and 11 units, giving you ample time to recharge. Stay notified with daily reminders to log power supply and track supply consistency in your area.
+
+📊 Easy Meter Calibration & Sync
+Keep Volt aligned with your physical meter reading in just seconds. Use quick daily power confirmations or one-tap manual calibration to sync your physical meter counter with Volt.
+
+📈 Daily Usage Insights & Recharge History
+Keep a clean digital record of every electricity token you purchase. Review historical recharges, track your average daily burn rate, and predict exactly how long your next recharge will last.
+
+SUPPORTED DISCOS:
+• IKEDC (Ikeja Electric)
+• EKEDC (Eko Electricity)
+• AEDC (Abuja Electricity)
+• IBEDC (Ibadan Electricity)
+• EEDC (Enugu Electricity)
+• PHED (Port Harcourt Electricity)
+• KEDCO (Kano Electricity)
+• BEDC (Benin Electricity)
+• KAEDCO (Kaduna Electricity)
+• JED (Jos Electricity)
+• YEDC (Yola Electricity)
+• ABA (Aba Power)
+
+WHO IS VOLT FOR?
+• Prepaid Meter Users: Stay in total control of your meter units and avoid surprise blackouts.
+• Tenants & Homeowners: Identify unit-heavy appliances and reduce high monthly Band A electricity bills.
+• Property Managers & Estates: Track power supply trends and monitor average consumption.
+
+Take control of your electricity bills today. Download Volt and stop guessing your meter units!
