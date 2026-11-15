@@ -171,3 +171,10 @@
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+#app-shell:has(#admin-root) {
+  max-width: 100% !important;
+  border-left-width: 0px !important;
+  border-right-width: 0px !important;
+  box-shadow: none !important;
+}

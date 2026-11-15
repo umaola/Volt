@@ -1,5 +1,18 @@
 {
   "projects": {
     "default": "volt-94f9f"
-  }
+  },
+  "targets": {
+    "volt-94f9f": {
+      "hosting": {
+        "app": [
+          "volt-94f9f"
+        ],
+        "admin": [
+          "volt-admin-94f9f"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }

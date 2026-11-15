@@ -5072,3 +5072,311 @@ export const scheduledTwentyMinuteReminders = onSchedule("*/20 * * * *", async (
         logger.error("Error in scheduledTwentyMinuteReminders:", err);
     }
 });
+
+async function verifyAdminAuth(request: any, response: any): Promise<DecodedIdToken | null> {
+    const decoded = await verifyRequestAuth(request, response);
+    if (!decoded) return null;
+
+    const email = (decoded.email || "").toLowerCase();
+    const isDomainAdmin = email.endsWith("@voltdigitalservices.com");
+
+    if (isDomainAdmin) {
+        return decoded;
+    }
+
+    try {
+        const userDoc = await db.collection("users").doc(decoded.uid).get();
+        if (userDoc.exists) {
+            const data = userDoc.data();
+            if (data?.is_admin === true || data?.role === "admin") {
+                return decoded;
+            }
+        }
+    } catch (err) {
+        logger.error("Error checking admin status:", err);
+    }
+
+    response.status(403).send({ error: "Forbidden: Admin access required" });
+    return null;
+}
+
+export const getAdminAnalyticsSummary = onRequest({ cors: true }, async (request, response) => {
+    try {
+        const adminUser = await verifyAdminAuth(request, response);
+        if (!adminUser) return;
+
+        const usersSnapshot = await db.collection("users").get();
+        const totalUsers = usersSnapshot.size;
+        let verifiedUsers = 0;
+        let sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+        let newUsersLast7Days = 0;
+
+        usersSnapshot.forEach((doc) => {
+            const data = doc.data();
+            if (data.email_verified) verifiedUsers++;
+            if (data.created_at) {
+                const createdTime = new Date(data.created_at).getTime();
+                if (createdTime >= sevenDaysAgo) newUsersLast7Days++;
+            }
+        });
+
+        const subsSnapshot = await db.collection("subscriptions").get();
+        let activeSubscriptions = 0;
+        subsSnapshot.forEach((doc) => {
+            const data = doc.data();
+            if (data.status === "active" || data.status === "trial") activeSubscriptions++;
+        });
+
+        const profilesSnapshot = await db.collection("electricity_profiles").get();
+        const discoCounts: Record<string, number> = {};
+        const bandCounts: Record<string, number> = {};
+        const cityCounts: Record<string, number> = {};
+
+        profilesSnapshot.forEach((doc) => {
+            const data = doc.data();
+            const d = (data.disco || "Unknown").toUpperCase();
+            const b = (data.tariff_band || "Unknown").toUpperCase();
+            const c = (data.city || data.state || "Unknown").trim();
+
+            discoCounts[d] = (discoCounts[d] || 0) + 1;
+            bandCounts[b] = (bandCounts[b] || 0) + 1;
+            if (c) cityCounts[c] = (cityCounts[c] || 0) + 1;
+        });
+
+        const rechargesSnapshot = await db.collection("recharges").orderBy("created_at", "desc").limit(500).get();
+        let totalRechargeNaira = 0;
+        let totalRechargeUnits = 0;
+        const discoRechargeNaira: Record<string, number> = {};
+        const dailyRechargeTrend: Record<string, { naira: number; units: number; count: number }> = {};
+
+        rechargesSnapshot.forEach((doc) => {
+            const data = doc.data();
+            const amount = Number(data.amount_paid || data.amount || 0);
+            const units = Number(data.units_received || data.units || 0);
+            const disco = (data.disco || "Unknown").toUpperCase();
+
+            totalRechargeNaira += amount;
+            totalRechargeUnits += units;
+            discoRechargeNaira[disco] = (discoRechargeNaira[disco] || 0) + amount;
+
+            const dateStr = (data.purchase_date || data.created_at || "").slice(0, 10);
+            if (dateStr && dateStr.length === 10) {
+                if (!dailyRechargeTrend[dateStr]) {
+                    dailyRechargeTrend[dateStr] = { naira: 0, units: 0, count: 0 };
+                }
+                dailyRechargeTrend[dateStr].naira += amount;
+                dailyRechargeTrend[dateStr].units += units;
+                dailyRechargeTrend[dateStr].count += 1;
+            }
+        });
+
+        const avgRechargeNaira = rechargesSnapshot.size > 0 ? totalRechargeNaira / rechargesSnapshot.size : 0;
+
+        const appliancesSnapshot = await db.collection("user_appliances").get();
+        const applianceMap: Record<string, { count: number; totalWattage: number; totalHours: number; totalDailyKwh: number }> = {};
+
+        appliancesSnapshot.forEach((doc) => {
+            const data = doc.data();
+            const name = (data.name || data.custom_name || "Unknown").trim();
+            const wattage = Number(data.custom_wattage || data.wattage || 0);
+            const hours = Number(data.hours_per_day || data.estimated_daily_hours || 0);
+            const quantity = Number(data.quantity || 1);
+
+            const dailyKwh = (wattage * hours * quantity) / 1000;
+
+            if (!applianceMap[name]) {
+                applianceMap[name] = { count: 0, totalWattage: 0, totalHours: 0, totalDailyKwh: 0 };
+            }
+            applianceMap[name].count += quantity;
+            applianceMap[name].totalWattage += wattage * quantity;
+            applianceMap[name].totalHours += hours * quantity;
+            applianceMap[name].totalDailyKwh += dailyKwh;
+        });
+
+        const topAppliances = Object.keys(applianceMap)
+            .map((name) => {
+                const item = applianceMap[name];
+                return {
+                    name,
+                    count: item.count,
+                    avgWattage: item.count > 0 ? Math.round(item.totalWattage / item.count) : 0,
+                    avgHours: item.count > 0 ? Math.round((item.totalHours / item.count) * 10) / 10 : 0,
+                    totalDailyKwh: Math.round(item.totalDailyKwh * 10) / 10
+                };
+            })
+            .sort((a, b) => b.totalDailyKwh - a.totalDailyKwh)
+            .slice(0, 15);
+
+        const powerLogsSnapshot = await db.collection("power_supply_logs").orderBy("date", "desc").limit(300).get();
+        let totalSupplyMinutes = 0;
+        let logsWithDuration = 0;
+
+        powerLogsSnapshot.forEach((doc) => {
+            const data = doc.data();
+            if (data.duration_minutes && typeof data.duration_minutes === "number") {
+                totalSupplyMinutes += data.duration_minutes;
+                logsWithDuration++;
+            }
+        });
+
+        const avgSupplyHours = logsWithDuration > 0 ? Math.round((totalSupplyMinutes / logsWithDuration / 60) * 10) / 10 : 0;
+
+        response.status(200).send({
+            success: true,
+            summary: {
+                totalUsers,
+                verifiedUsers,
+                newUsersLast7Days,
+                activeSubscriptions,
+                totalMetersTracked: profilesSnapshot.size,
+                totalRechargeNaira: Math.round(totalRechargeNaira),
+                totalRechargeUnits: Math.round(totalRechargeUnits),
+                avgRechargeNaira: Math.round(avgRechargeNaira),
+                rechargeCount: rechargesSnapshot.size,
+                avgSupplyHours,
+                discoDistribution: Object.entries(discoCounts).map(([name, count]) => ({ name, count })),
+                bandDistribution: Object.entries(bandCounts).map(([name, count]) => ({ name, count })),
+                topCities: Object.entries(cityCounts).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count).slice(0, 8),
+                discoRechargeNaira: Object.entries(discoRechargeNaira).map(([name, amount]) => ({ name, amount })),
+                dailyRechargeTrend: Object.entries(dailyRechargeTrend)
+                    .map(([date, data]) => ({ date, ...data }))
+                    .sort((a, b) => a.date.localeCompare(b.date))
+                    .slice(-14),
+                topAppliances
+            }
+        });
+    } catch (error) {
+        logger.error("Error in getAdminAnalyticsSummary:", error);
+        response.status(500).send({ success: false, error: "Internal server error" });
+    }
+});
+
+export const getAdminUsersList = onRequest({ cors: true }, async (request, response) => {
+    try {
+        const adminUser = await verifyAdminAuth(request, response);
+        if (!adminUser) return;
+
+        const { search = "", disco = "", band = "", limit = "50" } = request.query as any;
+        const maxLimit = Math.min(Number(limit) || 50, 100);
+        const searchLower = String(search).toLowerCase().trim();
+
+        const usersSnapshot = await db.collection("users").get();
+        const profilesSnapshot = await db.collection("electricity_profiles").get();
+        const profilesMap = new Map<string, any>();
+        profilesSnapshot.forEach((doc) => profilesMap.set(doc.id, doc.data()));
+
+        const metersSnapshot = await db.collection("meters").get();
+        const metersMap = new Map<string, any>();
+        metersSnapshot.forEach((doc) => {
+            const data = doc.data();
+            if (data.user_id) metersMap.set(data.user_id, data);
+        });
+
+        const userList: any[] = [];
+
+        usersSnapshot.forEach((doc) => {
+            const uid = doc.id;
+            const userData = doc.data();
+            const profile = profilesMap.get(uid) || {};
+            const meter = metersMap.get(uid) || {};
+
+            const userEmail = (userData.email || "").toLowerCase();
+            const userPhone = (userData.phone || "").toLowerCase();
+            const userName = (userData.full_name || userData.name || "").toLowerCase();
+            const meterNumber = (meter.meter_number || profile.meter_number || userData.meter_number || "").toLowerCase();
+            const userDisco = (profile.disco || userData.disco || "Unknown").toUpperCase();
+            const userBand = (profile.tariff_band || userData.tariff_band || "Unknown").toUpperCase();
+
+            if (disco && userDisco !== String(disco).toUpperCase()) return;
+            if (band && userBand !== String(band).toUpperCase()) return;
+
+            if (searchLower) {
+                const matches =
+                    userEmail.includes(searchLower) ||
+                    userPhone.includes(searchLower) ||
+                    userName.includes(searchLower) ||
+                    meterNumber.includes(searchLower);
+                if (!matches) return;
+            }
+
+            userList.push({
+                uid,
+                email: userData.email || "",
+                phone: userData.phone || "",
+                name: userData.full_name || userData.name || "Anonymous",
+                emailVerified: Boolean(userData.email_verified),
+                disco: userDisco,
+                tariffBand: userBand,
+                meterNumber: meter.meter_number || profile.meter_number || userData.meter_number || "",
+                currentUnits: typeof userData.current_units === "number" ? userData.current_units : meter.current_units || 0,
+                createdAt: userData.created_at || "",
+                subscriptionStatus: userData.subscription_status || "free"
+            });
+        });
+
+        userList.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+
+        response.status(200).send({
+            success: true,
+            total: userList.length,
+            users: userList.slice(0, maxLimit)
+        });
+    } catch (error) {
+        logger.error("Error in getAdminUsersList:", error);
+        response.status(500).send({ success: false, error: "Internal server error" });
+    }
+});
+
+export const getAdminUserDetail = onRequest({ cors: true }, async (request, response) => {
+    try {
+        const adminUser = await verifyAdminAuth(request, response);
+        if (!adminUser) return;
+
+        const { uid } = request.query as any;
+        if (!uid) {
+            response.status(400).send({ success: false, error: "Missing required parameter: uid" });
+            return;
+        }
+
+        const userDoc = await db.collection("users").doc(String(uid)).get();
+        if (!userDoc.exists) {
+            response.status(404).send({ success: false, error: "User not found" });
+            return;
+        }
+
+        const userData = userDoc.data() || {};
+        const profileDoc = await db.collection("electricity_profiles").doc(String(uid)).get();
+        const profileData = profileDoc.exists ? profileDoc.data() : {};
+
+        const subDoc = await db.collection("subscriptions").doc(String(uid)).get();
+        const subData = subDoc.exists ? subDoc.data() : {};
+
+        const appliancesSnap = await db.collection("user_appliances").where("user_id", "==", String(uid)).get();
+        const appliances: any[] = [];
+        appliancesSnap.forEach((doc) => appliances.push({ id: doc.id, ...doc.data() }));
+
+        const rechargesSnap = await db.collection("recharges").where("user_id", "==", String(uid)).orderBy("created_at", "desc").limit(15).get();
+        const recharges: any[] = [];
+        rechargesSnap.forEach((doc) => recharges.push({ id: doc.id, ...doc.data() }));
+
+        const calibrationSnap = await db.collection("calibration_logs").where("user_id", "==", String(uid)).orderBy("created_at", "desc").limit(10).get();
+        const calibrations: any[] = [];
+        calibrationSnap.forEach((doc) => calibrations.push({ id: doc.id, ...doc.data() }));
+
+        response.status(200).send({
+            success: true,
+            user: {
+                uid,
+                ...userData,
+                profile: profileData,
+                subscription: subData,
+                appliances,
+                recharges,
+                calibrations
+            }
+        });
+    } catch (error) {
+        logger.error("Error in getAdminUserDetail:", error);
+        response.status(500).send({ success: false, error: "Internal server error" });
+    }
+});
