@@ -1,10 +1,10 @@
 import * as React from "react"
 import { PrimaryButton, SecondaryButton } from "@/components/design-system/button"
 import { MeterProfileStep } from "./meter-profile-step"
+import { DwellingTypeStep, DWELLING_TYPES } from "./dwelling-type-step"
 import { ApplianceCalibrationStep } from "./appliance-calibration-step"
 import { CreditUnitsStep } from "./credit-units-step"
 import { OnboardingSkeleton } from "./skeleton-loading"
-import { Slider } from "@/components/ui/slider"
 import { TextField } from "@/components/design-system/input"
 import { IconClock } from "@tabler/icons-react"
 
@@ -15,6 +15,7 @@ interface OnboardingPageProps {
     disco: string
     tariffBand: string
     meterType: string
+    dwellingType?: string
     appliances: { name: string; wattage: number; hours: number }[]
     currentUnits: number
     powerState: "on" | "off"
@@ -43,6 +44,8 @@ export function OnboardingPage({
   const [tariffBand, setTariffBand] = React.useState("")
   const [meterType, setMeterType] = React.useState("")
 
+  const [dwellingType, setDwellingType] = React.useState("")
+
   const [selectedAppliances, setSelectedAppliances] = React.useState<
     { name: string; wattage: number; hours: number }[]
   >([])
@@ -60,6 +63,7 @@ export function OnboardingPage({
   const [customHours, setCustomHours] = React.useState(4)
 
   const catalog = [
+    { name: "LED Lights", defaultWattage: 18, defaultHours: 6 },
     { name: "Fan", defaultWattage: 75, defaultHours: 8 },
     { name: "TV", defaultWattage: 100, defaultHours: 6 },
     { name: "Refrigerator", defaultWattage: 250, defaultHours: 24 },
@@ -98,6 +102,27 @@ export function OnboardingPage({
       setVerificationError(null)
     }
   }, [meterNumber, disco, meterType, tariffBand, onVerifyMeter])
+
+  const handleSelectDwellingType = (typeId: string) => {
+    setDwellingType(typeId)
+    const type = DWELLING_TYPES.find((t) => t.id === typeId)
+    const roomCount = type?.rooms || 2
+    const ledBulbCount = roomCount * 2
+    const ledWattage = ledBulbCount * 9
+
+    const base: { name: string; wattage: number; hours: number }[] = [
+      { name: "LED Lights", wattage: ledWattage, hours: 6 },
+      { name: "Fan", wattage: Math.min(roomCount, 5) * 75, hours: 8 },
+      { name: "TV", wattage: typeId === "duplex" ? 200 : 100, hours: 6 },
+      { name: "Refrigerator", wattage: 250, hours: 24 }
+    ]
+
+    if (typeId === "three_bed_flat" || typeId === "duplex") {
+      base.push({ name: "Air Conditioner", wattage: 1500, hours: 4 })
+    }
+
+    setSelectedAppliances(base)
+  }
 
   const handleApplianceToggle = (item: { name: string; defaultWattage: number; defaultHours: number }) => {
     const exists = selectedAppliances.find((a) => a.name === item.name)
@@ -142,7 +167,7 @@ export function OnboardingPage({
   }
 
   const handleNext = () => {
-    if (step < 3) {
+    if (step < 4) {
       setStep(step + 1)
     } else {
       onComplete({
@@ -150,6 +175,7 @@ export function OnboardingPage({
         disco,
         tariffBand,
         meterType,
+        dwellingType,
         appliances: selectedAppliances,
         currentUnits: parseFloat(currentUnits) || 0,
         powerState
@@ -172,10 +198,10 @@ export function OnboardingPage({
       <div className="flex-1 overflow-y-auto p-6 flex flex-col">
         <div className="flex items-center justify-between mb-6">
           <span className="text-xs font-semibold text-primary uppercase tracking-wider">
-            Step {step} of 3
+            Step {step} of 4
           </span>
           <div className="flex gap-1">
-            {[1, 2, 3].map((i) => (
+            {[1, 2, 3, 4].map((i) => (
               <div
                 key={i}
                 className={`h-1.5 rounded-full transition-all duration-300 ${
@@ -204,6 +230,14 @@ export function OnboardingPage({
         )}
 
         {step === 2 && (
+          <DwellingTypeStep
+            selectedType={dwellingType}
+            onSelectType={handleSelectDwellingType}
+            isLoading={isLoading}
+          />
+        )}
+
+        {step === 3 && (
           <ApplianceCalibrationStep
             selectedAppliances={selectedAppliances}
             onApplianceToggle={handleApplianceToggle}
@@ -215,7 +249,7 @@ export function OnboardingPage({
           />
         )}
 
-        {step === 3 && (
+        {step === 4 && (
           <CreditUnitsStep
             currentUnits={currentUnits}
             setCurrentUnits={setCurrentUnits}
@@ -237,13 +271,14 @@ export function OnboardingPage({
             onClick={handleNext}
             disabled={
               (step === 1 && (!verifiedName || !disco || !tariffBand || !meterType)) ||
-              (step === 3 && !currentUnits) ||
+              (step === 2 && !dwellingType) ||
+              (step === 4 && !currentUnits) ||
               isLoading ||
               isVerifying
             }
             isLoading={isLoading}
           >
-            {step === 3 ? "Finish Setup" : "Continue"}
+            {step === 4 ? "Finish Setup" : "Continue"}
           </PrimaryButton>
         </div>
       </div>
@@ -269,50 +304,45 @@ export function OnboardingPage({
             label="Appliance Name"
             value={customName}
             onChange={(e) => setCustomName(e.target.value)}
-            disabled={isLoading}
           />
+
           <TextField
-            placeholder="e.g. 500"
+            placeholder="e.g. 1500"
             label="Wattage (W)"
             type="number"
             value={customWattage}
             onChange={(e) => setCustomWattage(e.target.value)}
-            disabled={isLoading}
           />
-          <div className="flex flex-col gap-1.5 mt-1">
+
+          <div className="flex flex-col gap-2">
             <div className="flex justify-between items-center text-xs">
-              <span className="text-[#4B5563] flex items-center gap-1">
-                <IconClock className="w-3.5 h-3.5" /> Daily Usage Hours
+              <span className="font-bold text-[#121212] flex items-center gap-1">
+                <IconClock className="w-4 h-4 text-[#4B5563]" />
+                Daily Usage
               </span>
-              <span className="font-semibold text-[#121212]">{customHours} hrs</span>
+              <span className="font-bold text-primary">{customHours} hrs/day</span>
             </div>
-            <Slider
-              value={[customHours]}
-              min={0.5}
-              max={24}
-              step={0.5}
-              onValueChange={(vals) => setCustomHours(vals[0])}
-              disabled={isLoading}
+            <input
+              type="range"
+              min="0.5"
+              max="24"
+              step="0.5"
+              value={customHours}
+              onChange={(e) => setCustomHours(parseFloat(e.target.value))}
+              className="w-full accent-primary h-1.5 bg-zinc-200 rounded-lg appearance-none cursor-pointer"
             />
           </div>
         </div>
 
-        <div className="flex flex-col gap-2">
-          <button
-            type="button"
-            onClick={handleAddCustom}
-            disabled={!customName.trim() || !customWattage || isLoading}
-            className="w-full h-12 rounded-xl bg-primary text-white text-sm font-semibold flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Add Appliance
-          </button>
-          <button
-            type="button"
-            onClick={() => setIsCustomOpen(false)}
-            className="w-full h-12 rounded-xl border border-zinc-200 bg-transparent text-[#4B5563] text-sm font-semibold flex items-center justify-center transition-colors"
-          >
-            Cancel
-          </button>
+        <div className="flex items-center gap-3">
+          <div className="w-1/3">
+            <SecondaryButton onClick={() => setIsCustomOpen(false)}>Cancel</SecondaryButton>
+          </div>
+          <div className="flex-1">
+            <PrimaryButton onClick={handleAddCustom} disabled={!customName.trim() || !customWattage}>
+              Add Appliance
+            </PrimaryButton>
+          </div>
         </div>
       </div>
     </div>

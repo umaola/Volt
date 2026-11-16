@@ -11,6 +11,7 @@ export function OnboardingSkeleton() {
             <Skeleton className="h-1.5 w-4 rounded-full" />
             <Skeleton className="h-1.5 w-1.5 rounded-full" />
             <Skeleton className="h-1.5 w-1.5 rounded-full" />
+            <Skeleton className="h-1.5 w-1.5 rounded-full" />
           </div>
         </div>
 

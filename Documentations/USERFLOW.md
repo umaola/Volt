@@ -47,62 +47,36 @@ Onboarding
 4. Onboarding Flow
 This is the most important flow because it determines prediction accuracy.
 
-Step 1: Input Meter number and Meter Number Verification 
+Step 1: Electricity Profile
 Input:
-Input your Meter Number
+- Meter Number (Auto-verified with customer name display)
+- Distribution Company (Disco: EKEDP, IKEDC, AEDC, IBEDC, etc.)
+- Meter Type (Prepaid, Postpaid)
+- Tariff Band (Band A - Band E)
 
-When a meter number is imputed, the system automatically verifies the meter Number and shows the Name of the Meter Number below the input field.
+Step 2: Dwelling Type
+Header: Dwelling Type
+Options (Names alone, no explanatory text, Shared Compound behaves identically to other house types):
+- Self-Contain / Studio
+- 1-Bedroom Mini-Flat
+- 2-Bedroom Flat
+- 3-Bedroom Flat
+- Duplex / Detached House
+- Shared Compound
 
-Example:
-0127217047315
+Step 3: Calibrate Appliances
+Pre-populated with a smart default bundle based on Dwelling Type:
+- Default two LED lights for each room (e.g. 1 room = 2 bulbs, 2 rooms = 4 bulbs, 3 rooms = 6 bulbs, 4 rooms = 8 bulbs, 6 rooms = 12 bulbs)
+- Typical baseline appliances (Fans, TV, Refrigerator, AC for larger dwellings)
+- User can tap to toggle, edit wattage, or adjust daily usage hours.
 
-
-Step 2: Select Distribution Company
+Step 4: Current Remaining Units
 Question:
-Select your distribution company.
-
-Examples:
-EKEDP
-IKEDC
-EEDC
-AEDC
-IBEDC
-Step 3: Select Tariff Band
-Question:
-What tariff band are you on?
-
-Options:
-Band A
-Band B
-Band C
-Band D
-Band E
-
-Step 4: Meter Type
-Question:
-What type of meter do you use?
-
-Options:
-Prepaid
-Postpaid
-Step 5: Add Appliances
-Users choose appliances.
-Examples:
-Refrigerator
-Air Conditioner
-Fan
-TV
-Iron
-Microwave
-
-For each appliance:
-Users have the ability to calibrate the amount of watts different from the system's given watt measurement.
-Step 6: Current Unit
-Question:
-What is your Current Remanining Unit?
+What is your Current Remaining Unit?
 
 Example:
 300
+
 5. Dashboard Flow (Home)
 This becomes the most visited screen.
 Top Section

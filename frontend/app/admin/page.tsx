@@ -2,12 +2,14 @@
 
 import * as React from "react"
 import { auth } from "@/lib/firebase"
-import { onAuthStateChanged, signInWithEmailAndPassword, signOut, User } from "firebase/auth"
+import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, signOut, User } from "firebase/auth"
 import {
   AdminPage,
   AdminSummaryData,
   AdminUserItem,
-  AdminUserDetail
+  AdminUserDetail,
+  DepletionAccuracyData,
+  AnomalyEngineData
 } from "@/components/pages/admin-page"
 
 export default function AdminControllerPage() {
@@ -19,6 +21,8 @@ export default function AdminControllerPage() {
 
   const [isLoadingSummary, setIsLoadingSummary] = React.useState(false)
   const [summaryData, setSummaryData] = React.useState<AdminSummaryData | null>(null)
+  const [depletionData, setDepletionData] = React.useState<DepletionAccuracyData | null>(null)
+  const [anomaliesData, setAnomaliesData] = React.useState<AnomalyEngineData | null>(null)
 
   const [usersList, setUsersList] = React.useState<AdminUserItem[]>([])
   const [isUsersLoading, setIsUsersLoading] = React.useState(false)
@@ -53,8 +57,10 @@ export default function AdminControllerPage() {
       }
 
       const data = await res.json()
-      if (data.success && data.summary) {
-        setSummaryData(data.summary)
+      if (data.success) {
+        if (data.summary) setSummaryData(data.summary)
+        if (data.depletionAccuracy) setDepletionData(data.depletionAccuracy)
+        if (data.anomalies) setAnomaliesData(data.anomalies)
         setIsAuthenticated(true)
         setAuthError(null)
       }
@@ -156,15 +162,23 @@ export default function AdminControllerPage() {
     setSelectedUserDetail(null)
   }
 
-  const handleLogin = async (email: string, pass: string) => {
+  const handleLogin = async (email: string, pass: string, isRegistering = false, name = "") => {
     try {
       setIsSubmittingLogin(true)
       setAuthError(null)
-      const cred = await signInWithEmailAndPassword(auth, email, pass)
-      await fetchSummary(cred.user)
+      let userCred: any
+      if (isRegistering) {
+        userCred = await createUserWithEmailAndPassword(auth, email, pass)
+        if (name && userCred.user) {
+          await updateProfile(userCred.user, { displayName: name }).catch(() => null)
+        }
+      } else {
+        userCred = await signInWithEmailAndPassword(auth, email, pass)
+      }
+      await fetchSummary(userCred.user)
       await fetchUsers()
     } catch (err: any) {
-      setAuthError(err.message || "Failed to sign in. Please verify your credentials.")
+      setAuthError(err.message || "Failed to authenticate. Please check your credentials.")
     } finally {
       setIsSubmittingLogin(false)
     }
@@ -175,6 +189,8 @@ export default function AdminControllerPage() {
     setCurrentUser(null)
     setIsAuthenticated(false)
     setSummaryData(null)
+    setDepletionData(null)
+    setAnomaliesData(null)
     setUsersList([])
   }
 
@@ -186,6 +202,8 @@ export default function AdminControllerPage() {
       authError={authError}
       currentAdminEmail={currentUser?.email}
       summaryData={summaryData}
+      depletionAccuracyData={depletionData}
+      anomaliesData={anomaliesData}
       usersList={usersList}
       isUsersLoading={isUsersLoading}
       selectedUserDetail={selectedUserDetail}

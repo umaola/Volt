@@ -1398,12 +1398,16 @@ function PageContent() {
     disco: string
     tariffBand: string
     meterType: string
+    dwellingType?: string
     appliances: any[]
     currentUnits: number
     powerState: "on" | "off"
   }) => {
     setIsLoading(true)
     localStorage.setItem("volt_appliances", JSON.stringify(data.appliances))
+    if (data.dwellingType) {
+      localStorage.setItem("volt_dwelling_type", data.dwellingType)
+    }
     if (data.powerState === "on") {
       const localLogs = [{
         id: "local_" + Date.now(),
@@ -1429,6 +1433,7 @@ function PageContent() {
         disco: data.disco,
         tariffBand: data.tariffBand,
         meterType: data.meterType,
+        dwellingType: data.dwellingType,
         appliances: data.appliances,
         currentUnits: data.currentUnits,
         powerState: data.powerState
@@ -1443,6 +1448,7 @@ function PageContent() {
           disco: data.disco,
           tariffBand: data.tariffBand,
           meterType: data.meterType,
+          dwellingType: data.dwellingType || "",
           currentUnits: data.currentUnits,
           plan: user?.plan || "",
           notificationPreferences: user?.notificationPreferences,

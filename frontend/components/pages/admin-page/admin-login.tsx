@@ -1,12 +1,15 @@
 import * as React from "react"
-import { IconShieldLock, IconBolt, IconAlertCircle } from "@tabler/icons-react"
+import { IconShieldLock, IconBolt, IconAlertCircle, IconUserPlus, IconLogin, IconRefresh, IconLogout } from "@tabler/icons-react"
 import { Spinner } from "@/components/ui/spinner"
 import { Skeleton } from "@/components/ui/skeleton"
 
 interface AdminLoginProps {
   isLoading?: boolean
   error?: string | null
-  onSubmitLogin: (email: string, pass: string) => Promise<void>
+  currentUserEmail?: string | null
+  onSubmitLogin: (email: string, pass: string, isRegistering?: boolean, name?: string) => Promise<void>
+  onRetry?: () => void
+  onLogout?: () => void
 }
 
 export function AdminLoginSkeleton() {
@@ -28,7 +31,16 @@ export function AdminLoginSkeleton() {
   )
 }
 
-export function AdminLogin({ isLoading = false, error = null, onSubmitLogin }: AdminLoginProps) {
+export function AdminLogin({
+  isLoading = false,
+  error = null,
+  currentUserEmail = null,
+  onSubmitLogin,
+  onRetry,
+  onLogout
+}: AdminLoginProps) {
+  const [isRegistering, setIsRegistering] = React.useState(false)
+  const [name, setName] = React.useState("")
   const [email, setEmail] = React.useState("")
   const [password, setPassword] = React.useState("")
   const [validationError, setValidationError] = React.useState("")
@@ -39,8 +51,12 @@ export function AdminLogin({ isLoading = false, error = null, onSubmitLogin }: A
       setValidationError("Please enter both email and password")
       return
     }
+    if (password.length < 6) {
+      setValidationError("Password must be at least 6 characters")
+      return
+    }
     setValidationError("")
-    await onSubmitLogin(email.trim(), password)
+    await onSubmitLogin(email.trim(), password, isRegistering, name.trim())
   }
 
   return (
@@ -51,7 +67,73 @@ export function AdminLogin({ isLoading = false, error = null, onSubmitLogin }: A
             <IconBolt className="w-8 h-8" />
           </div>
           <h2 className="text-xl font-bold text-zinc-900 tracking-tight">Volt Intelligence Admin</h2>
-          <p className="text-xs text-zinc-500 mt-1">Sign in with your authorized admin account to continue</p>
+          <p className="text-xs text-zinc-500 mt-1">
+            {isRegistering
+              ? "Create your initial master administrator credentials"
+              : "Sign in with your authorized admin account to continue"}
+          </p>
+        </div>
+
+        {currentUserEmail && (
+          <div className="p-3 bg-zinc-50 border border-zinc-200 rounded-xl flex items-center justify-between text-xs">
+            <div className="flex flex-col">
+              <span className="text-[10px] text-zinc-500 font-medium">Signed in as</span>
+              <span className="font-semibold text-zinc-900">{currentUserEmail}</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              {onRetry && (
+                <button
+                  type="button"
+                  onClick={onRetry}
+                  disabled={isLoading}
+                  className="px-2.5 py-1 bg-white hover:bg-zinc-100 border border-zinc-200 rounded-lg font-medium text-zinc-700 flex items-center gap-1 cursor-pointer transition-colors"
+                >
+                  <IconRefresh className="w-3.5 h-3.5" />
+                  <span>Retry</span>
+                </button>
+              )}
+              {onLogout && (
+                <button
+                  type="button"
+                  onClick={onLogout}
+                  disabled={isLoading}
+                  className="px-2.5 py-1 bg-white hover:bg-red-50 border border-zinc-200 hover:border-red-200 rounded-lg font-medium text-red-600 flex items-center gap-1 cursor-pointer transition-colors"
+                >
+                  <IconLogout className="w-3.5 h-3.5" />
+                  <span>Sign Out</span>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className="flex bg-zinc-100 p-1 rounded-xl">
+          <button
+            type="button"
+            onClick={() => {
+              setIsRegistering(false)
+              setValidationError("")
+            }}
+            className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+              !isRegistering ? "bg-white text-zinc-900 shadow-xs" : "text-zinc-500 hover:text-zinc-800"
+            }`}
+          >
+            <IconLogin className="w-3.5 h-3.5" />
+            <span>Sign In</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setIsRegistering(true)
+              setValidationError("")
+            }}
+            className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+              isRegistering ? "bg-white text-zinc-900 shadow-xs" : "text-zinc-500 hover:text-zinc-800"
+            }`}
+          >
+            <IconUserPlus className="w-3.5 h-3.5" />
+            <span>Create Admin</span>
+          </button>
         </div>
 
         {(error || validationError) && (
@@ -62,6 +144,20 @@ export function AdminLogin({ isLoading = false, error = null, onSubmitLogin }: A
         )}
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          {isRegistering && (
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-bold text-zinc-700">Full Name</label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="e.g. Founder / Admin"
+                disabled={isLoading}
+                className="h-11 px-3.5 rounded-xl border border-zinc-200 text-xs text-zinc-900 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all disabled:opacity-50"
+              />
+            </div>
+          )}
+
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-bold text-zinc-700">Admin Email</label>
             <input
@@ -93,13 +189,21 @@ export function AdminLogin({ isLoading = false, error = null, onSubmitLogin }: A
             disabled={isLoading}
             className="w-full h-11 rounded-xl bg-primary hover:bg-emerald-600 active:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer shadow-sm disabled:opacity-50 mt-2"
           >
-            {isLoading ? <Spinner className="w-4 h-4 animate-spin text-white" /> : "Sign In to Admin Portal"}
+            {isLoading ? (
+              <Spinner className="w-4 h-4 animate-spin text-white" />
+            ) : isRegistering ? (
+              "Create Admin Account"
+            ) : (
+              "Sign In to Admin Portal"
+            )}
           </button>
         </form>
 
         <div className="text-center">
           <span className="text-[11px] text-zinc-400">
-            Protected area. Access is restricted to authorized Volt administrators.
+            {isRegistering
+              ? "Creating an account with your @voltdigitalservices.com domain grants administrative rights."
+              : "Protected area. Access is restricted to authorized Volt administrators."}
           </span>
         </div>
       </div>

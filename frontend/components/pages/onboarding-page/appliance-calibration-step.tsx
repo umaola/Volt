@@ -9,7 +9,8 @@ import {
   IconFlame,
   IconPlug,
   IconPlus,
-  IconBolt
+  IconBolt,
+  IconBulb
 } from "@tabler/icons-react"
 
 interface Appliance {
@@ -51,6 +52,7 @@ export function ApplianceCalibrationStep({
     if (normalized.includes("air conditioner") || normalized.includes("ac")) return <IconSnowflake className="w-5 h-5 text-cyan-600" />
     if (normalized.includes("iron")) return <IconFlame className="w-5 h-5 text-amber-600" />
     if (normalized.includes("microwave")) return <IconFlame className="w-5 h-5 text-orange-600" />
+    if (normalized.includes("light") || normalized.includes("bulb") || normalized.includes("led")) return <IconBulb className="w-5 h-5 text-amber-500" />
     return <IconPlug className="w-5 h-5 text-[#888888]" />
   }
 
