@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from "@capacitor/cli"
 
 const config: CapacitorConfig = {
-  appId: "com.nepa.app",
+  appId: "com.voltapp.africa",
   appName: "Volt",
   webDir: "out",
 }

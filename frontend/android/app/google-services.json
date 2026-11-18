@@ -7,25 +7,6 @@
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:370469332401:android:6fe633d94a9ae069cb8990",
-        "android_client_info": {
-          "package_name": "com.nepa.app"
-        }
-      },
-      "oauth_client": [],
-      "api_key": [
-        {
-          "current_key": "AIzaSyBLg3SpmK5iEyPu4AcGpXyC2xgdXI5u6aI"
-        }
-      ],
-      "services": {
-        "appinvite_service": {
-          "other_platform_oauth_client": []
-        }
-      }
-    },
-    {
-      "client_info": {
         "mobilesdk_app_id": "1:370469332401:android:d4617415292eae1bcb8990",
         "android_client_info": {
           "package_name": "com.voltapp.africa"
